@@ -1,0 +1,16 @@
+#!/bin/sh
+# 커밋에 API 키나 .env, 일지 파일이 섞이면 커밋을 막는다.
+fail=0
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+for f in $staged; do
+  case "$f" in
+    .env|.env.*|*.hwp|*.hwpx|*.key|*.pem)
+      [ "$f" = ".env.example" ] && continue
+      echo "커밋 차단: 비밀 정보나 일지 파일은 올릴 수 없습니다 -> $f"; fail=1 ;;
+  esac
+done
+if git diff --cached -U0 | grep -E '^\+' | grep -v '^+++' | grep -E 'sk-ant-[A-Za-z0-9_-]{10,}' >/dev/null; then
+  echo "커밋 차단: 변경 내용에 API 키로 보이는 문자열이 있습니다. 키는 .env에만 넣으세요."
+  fail=1
+fi
+exit $fail
