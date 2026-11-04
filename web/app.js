@@ -625,8 +625,8 @@
   async function runAi() {
     if (!state.doc || ai.busy) return;
     if (state.editing) commitEdit();
-    const memo = $('aiMemo').value.trim();
-    if (!memo) { toast('이번 주 메모를 먼저 적어 주세요.', true); $('aiMemo').focus(); return; }
+    const memo = composeMemo();
+    if (!memo) { toast('월안을 불러오거나 요일별 활동을 적어 주세요.', true); return; }
     if (ai.needsCode && !/^\d{6}$/.test($('aiCode').value.trim())) { toast('연결 번호 6자리를 넣어 주세요.', true); $('aiCode').focus(); return; }
     const names = NameMask.parseNames($('aiNames').value);
     if (!names.length && !ai.ackNoNames) { ai.ackNoNames = true; $('aiWarn').hidden = false; $('namesBox').open = true; return; }
@@ -711,9 +711,264 @@
   $('aiUndo').addEventListener('click', undoAi);
   loadAiStatus();
 
+  /* ---------- 월안(교육계획안) ---------- */
+  const PLAN_KEY = 'kissay.plan';
+  const DAYS = ['월', '화', '수', '목', '금'];
+  const plan = { weeks: [], notes: [], index: 0, busy: false };
+  let lastDayInput = null;
+
+  function loadSavedPlan() {
+    try {
+      const v = JSON.parse(localStorage.getItem(PLAN_KEY) || 'null');
+      if (v && Array.isArray(v.weeks) && v.weeks.length) { plan.weeks = v.weeks; plan.notes = Array.isArray(v.notes) ? v.notes : []; }
+    } catch (e) { /* 저장소를 못 쓰는 브라우저 */ }
+  }
+  function savePlan() {
+    try { localStorage.setItem(PLAN_KEY, JSON.stringify({ weeks: plan.weeks, notes: plan.notes, savedAt: Date.now() })); } catch (e) { /* 무시 */ }
+  }
+  function currentWeek() { return plan.weeks[plan.index] || null; }
+  const md = (s) => { const x = /(\d+)\s*\.\s*(\d+)/.exec(s || ''); return x ? (+x[1]) * 100 + (+x[2]) : null; };
+
+  // 오늘이 들어 있는 주, 없으면 다가오는 주를 고른다.
+  function pickDefaultWeek() {
+    const now = new Date();
+    const today = (now.getMonth() + 1) * 100 + now.getDate();
+    let idx = plan.weeks.findIndex((w) => { const a = md(w.start), b = md(w.end); return a != null && b != null && a <= today && today <= b + 2; });
+    if (idx < 0) idx = plan.weeks.findIndex((w) => { const a = md(w.start); return a != null && a > today; });
+    plan.index = idx < 0 ? 0 : idx;
+  }
+
+  function chip(text, cls, day) {
+    const b = el('button', 'chip' + (cls ? ' ' + cls : ''), text);
+    b.type = 'button';
+    b.title = '눌러서 활동 칸에 넣기';
+    b.addEventListener('click', () => insertActivity(text, day));
+    return b;
+  }
+  function insertActivity(text, day) {
+    const input = day ? document.querySelector('.day[data-day="' + day + '"] .act') : (lastDayInput || document.querySelector('.day .act'));
+    if (!input) return;
+    const v = input.value.trim();
+    input.value = v ? v + ', ' + text : text;
+    input.focus();
+    lastDayInput = input;
+  }
+
+  function renderDays() {
+    const box = $('days');
+    const prev = {};
+    box.querySelectorAll('.day').forEach((d) => { prev[d.dataset.day] = { act: d.querySelector('.act').value, kid: d.querySelector('.kid').value }; });
+    box.textContent = '';
+    const w = currentWeek();
+    DAYS.forEach((day, i) => {
+      const info = w && (w.days || []).find((x) => x.day === day);
+      const row = el('div', 'day');
+      row.dataset.day = day;
+      const head = el('div', 'day-head');
+      head.appendChild(el('b', null, day));
+      if (info && info.date) head.appendChild(el('span', null, info.date));
+      const act = el('input', 'act');
+      act.type = 'text';
+      act.placeholder = i === 0 ? '오늘 한 활동 (예: 나사 돌리기, 블록수업 왕관)' : '오늘 한 활동';
+      act.setAttribute('aria-label', day + '요일 활동');
+      act.value = (prev[day] || {}).act || '';
+      act.addEventListener('focus', () => { lastDayInput = act; });
+      const kid = el('input', 'kid');
+      kid.type = 'text';
+      kid.placeholder = '아이 모습 (선택) 예: 민서 - 나사를 끝까지 돌림';
+      kid.setAttribute('aria-label', day + '요일 아이 모습');
+      kid.value = (prev[day] || {}).kid || '';
+      row.append(head, act);
+      const items = info ? (info.items || []).filter((it) => it.activity && it.activity.trim() && it.activity.trim() !== '*') : [];
+      if (items.length) {
+        const cr = el('div', 'chip-row');
+        items.slice(0, 4).forEach((it) => cr.appendChild(chip(it.category ? it.category + ': ' + it.activity : it.activity, 'day-chip', day)));
+        row.appendChild(cr);
+      }
+      row.appendChild(kid);
+      box.appendChild(row);
+    });
+  }
+
+  function renderPlan() {
+    const has = plan.weeks.length > 0;
+    $('planEmpty').hidden = has || plan.busy;
+    $('planLoading').hidden = !plan.busy;
+    $('planReady').hidden = !has || plan.busy;
+    if (has) {
+      const sel = $('weekSelect');
+      sel.textContent = '';
+      plan.weeks.forEach((w, i) => {
+        const o = el('option', null, w.label + (w.start ? ' (' + w.start + '~' + w.end + ')' : ''));
+        o.value = String(i);
+        sel.appendChild(o);
+      });
+      sel.value = String(plan.index);
+      const w = currentWeek();
+      const sum = $('weekSum');
+      sum.textContent = '';
+      const title = [w.theme, w.subtheme].filter(Boolean).join(' / ');
+      if (title) sum.appendChild(el('b', null, title));
+      (w.goals || []).forEach((g) => sum.appendChild(el('span', null, 'ㆍ ' + String(g).replace(/^[ㆍ·\-\s]+/, ''))));
+      const chips = $('weekChips');
+      chips.textContent = '';
+      [...(w.free_play || []), ...(w.areas || []).map((a) => a.activity)].filter(Boolean).slice(0, 16)
+        .forEach((t) => chips.appendChild(chip(t)));
+      const notes = $('planNotes');
+      notes.textContent = '';
+      plan.notes.forEach((n) => notes.appendChild(el('li', null, n)));
+      notes.hidden = !plan.notes.length;
+    }
+    renderDays();
+  }
+
+  // 일지 채우기에 보낼 메모: 고른 주의 월안 + 요일별 활동 + 더 적을 말
+  function composeMemo() {
+    const parts = [];
+    const w = currentWeek();
+    if (w) {
+      const L = ['[이번 주 월안]'];
+      L.push('시기: ' + w.label + (w.start ? ' (' + w.start + '~' + w.end + ')' : ''));
+      if (w.theme || w.subtheme) L.push('놀이주제: ' + [w.theme, w.subtheme].filter(Boolean).join(' / '));
+      if ((w.goals || []).length) L.push('기대되는 우리: ' + w.goals.join(' / '));
+      if ((w.free_play || []).length) L.push('자유놀이 교구: ' + w.free_play.join(' / '));
+      if ((w.areas || []).length) L.push('영역별 놀이: ' + w.areas.map((a) => a.name + ' - ' + a.activity).join('; '));
+      (w.days || []).forEach((d) => {
+        const it = (d.items || []).map((i) => i.category + ' - ' + i.activity).join('; ');
+        if (it) L.push(d.day + '(' + d.date + '): ' + it);
+      });
+      if ((w.weekly || []).length) L.push('한 주 공통: ' + w.weekly.map((x) => x.category + ' - ' + x.activity).join('; '));
+      parts.push(L.join('\n'));
+    }
+    const rows = Array.from(document.querySelectorAll('#days .day'));
+    const anyDay = rows.some((r) => r.querySelector('.act').value.trim() || r.querySelector('.kid').value.trim());
+    if (w || anyDay) {
+      const D = rows.map((r) => {
+        const day = r.dataset.day;
+        const info = w && (w.days || []).find((x) => x.day === day);
+        const act = r.querySelector('.act').value.trim();
+        const kid = r.querySelector('.kid').value.trim();
+        return day + (info && info.date ? '(' + info.date + ')' : '') + ': 활동: ' + (act || '(비워 둠)') + (kid ? ' / 아이 모습: ' + kid : '');
+      });
+      parts.push('[요일별 활동]\n' + D.join('\n'));
+    }
+    const extra = $('aiMemo').value.trim();
+    if (extra) parts.push('[더 적을 말]\n' + extra);
+    return parts.join('\n\n');
+  }
+
+  async function blobToBase64(blob) {
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    let s = '';
+    for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+  // 사진은 긴 변 2000px 이하 JPEG로 줄여서 보낸다.
+  async function imageToJpeg(file) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = () => rej(new Error('사진을 열지 못했어요: ' + file.name));
+        i.src = url;
+      });
+      const k = Math.min(1, 2000 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * k);
+      c.height = Math.round(img.naturalHeight * k);
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.88));
+      return { mediaType: 'image/jpeg', data: await blobToBase64(blob) };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+  // 한글(.hwpx) 월안은 표를 글로 풀어서 보낸다(사진보다 정확하고 가볍다).
+  async function hwpxToText(buf) {
+    const zip = await JSZip.loadAsync(buf);
+    const hpf = zip.file('Contents/content.hpf');
+    const paths = E.sectionPathsFromManifest(hpf ? await hpf.async('string') : '', Object.keys(zip.files));
+    const dec = new TextDecoder('utf-8');
+    const out = [];
+    const walk = (blocks) => {
+      for (const b of blocks) {
+        if (b.type === 'table') {
+          out.push('[표]');
+          for (const row of b.rows) out.push(row.map((c) => (c.blocks.length ? '(안쪽 표)' : c.unit.origLines.join(' ').trim())).join(' | '));
+          for (const row of b.rows) for (const c of row) if (c.blocks.length) walk(c.blocks);
+        } else if (b.type === 'text') out.push(b.unit.origLines.join('\n'));
+        else if (b.type === 'readonly') out.push(b.text);
+      }
+    };
+    for (const p of paths) {
+      const f = zip.file(p);
+      if (f) walk(E.parseSection(dec.decode(await f.async('uint8array')), 0).blocks);
+    }
+    return out.join('\n');
+  }
+  async function readPlanFiles(files) {
+    const payload = { files: [], text: '' };
+    for (const f of files) {
+      const head = new Uint8Array(await f.slice(0, 4).arrayBuffer());
+      const name = f.name.toLowerCase();
+      if (head[0] === 0xd0 && head[1] === 0xcf) throw new Error('예전 한글 파일(.hwp)이에요. 한글에서 PDF나 HWPX로 저장해서 올려 주세요.');
+      if (name.endsWith('.hwpx') || (head[0] === 0x50 && head[1] === 0x4b)) payload.text += (payload.text ? '\n\n' : '') + await hwpxToText(await f.arrayBuffer());
+      else if (name.endsWith('.pdf') || f.type === 'application/pdf') payload.files.push({ mediaType: 'application/pdf', data: await blobToBase64(f) });
+      else if ((f.type || '').startsWith('image/') || /\.(jpe?g|png|webp|gif)$/i.test(name)) payload.files.push(await imageToJpeg(f));
+      else throw new Error('PDF, 사진, 한글(.hwpx) 파일만 올릴 수 있어요: ' + f.name);
+    }
+    return payload;
+  }
+
+  async function loadPlan(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length || plan.busy) return;
+    if (inArtifact || ai.mode === 'off') { toast('이 주소에서는 월안을 읽을 수 없어요. 일지 도우미를 켠 컴퓨터 주소로 들어와 주세요.', true); return; }
+    if (ai.needsCode && !/^\d{6}$/.test($('aiCode').value.trim())) { toast('연결 번호 6자리를 먼저 넣어 주세요.', true); $('aiCode').focus(); return; }
+    plan.busy = true;
+    renderPlan();
+    const t0 = Date.now();
+    const tick = setInterval(() => {
+      $('planLoadingText').textContent = '월안을 읽고 있어요… ' + Math.round((Date.now() - t0) / 1000) + '초 (1~2분 걸릴 수 있어요)';
+    }, 500);
+    try {
+      const payload = await readPlanFiles(files);
+      const headers = { 'Content-Type': 'application/json' };
+      if (ai.needsCode) headers['X-Access-Code'] = $('aiCode').value.trim();
+      const r = await fetch('/api/plan', { method: 'POST', headers, body: JSON.stringify(payload) });
+      let data = null;
+      try { data = await r.json(); } catch (e) { /* 아래에서 처리 */ }
+      if (!r.ok || !data) throw new Error((data && data.error) || '월안을 읽지 못했어요. 잠시 뒤 다시 해 주세요.');
+      plan.weeks = data.weeks || [];
+      plan.notes = data.notes || [];
+      pickDefaultWeek();
+      savePlan();
+      toast(plan.weeks.length + '주 계획을 정리했어요. 몇째 주인지 확인해 주세요.');
+    } catch (err) {
+      console.error(err);
+      toast(err.message || String(err), true);
+    } finally {
+      clearInterval(tick);
+      plan.busy = false;
+      $('planLoadingText').textContent = '월안을 읽고 있어요…';
+      renderPlan();
+    }
+  }
+
+  $('planInput').addEventListener('change', (e) => { loadPlan(e.target.files); e.target.value = ''; });
+  $('planReload').addEventListener('click', () => $('planInput').click());
+  $('weekSelect').addEventListener('change', (e) => { plan.index = +e.target.value; renderPlan(); });
+  loadSavedPlan();
+  if (plan.weeks.length) pickDefaultWeek();
+  renderPlan();
+
   /* ---------- 개발용: ?dev 패널, 로컬 서버의 샘플 자동 열기, 검증용 훅 ---------- */
   if (/[?&]dev\b/.test(location.search)) $('devTools').hidden = false;
-  window.__hwpxApp = { state, openArrayBuffer, exportBlob, startEdit, commitEdit };
+  window.__hwpxApp = { state, openArrayBuffer, exportBlob, startEdit, commitEdit, plan, composeMemo, renderPlan, readPlanFiles };
   if (!inArtifact && /[?&]sample\b/.test(location.search)) {
     fetch('/__sample.hwpx').then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('샘플 없음'))))
       .then((b) => openArrayBuffer(b, decodeURIComponent((location.search.match(/name=([^&]+)/) || [])[1] || 'sample.hwpx')))

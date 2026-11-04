@@ -29,7 +29,8 @@ HEAD = (b'<!doctype html><html lang="ko"><head><meta charset="utf-8">'
         b'<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
         b'</head><body>')
 TAIL = b"</body></html>"
-MAX_BODY = 512 * 1024          # AI 요청 본문 최대 크기
+MAX_BODY = 512 * 1024          # 일지 채우기 요청 본문 최대 크기
+MAX_PLAN_BODY = 30 * 1024 * 1024  # 월안(PDF·사진) 요청 본문 최대 크기
 RATE_PER_MINUTE = 6            # 1분에 받을 AI 요청 수
 MAX_CONCURRENT = 2             # 동시에 처리할 AI 요청 수
 
@@ -148,7 +149,9 @@ def make_handler(cfg):
         def do_POST(self):
             u = urlparse(self.path)
             if u.path == "/api/draft":
-                return self._draft()
+                return self._api(MAX_BODY, lambda b: ai_writer.draft(b.get("form"), b.get("memo"), cfg["mode"]))
+            if u.path == "/api/plan":
+                return self._api(MAX_PLAN_BODY, lambda b: ai_writer.read_plan(b.get("files"), b.get("text"), cfg["mode"]))
             if u.path == "/__save" and cfg["sample"] and self._local():
                 name = os.path.basename(parse_qs(u.query).get("name", ["result.hwpx"])[0])
                 if not name.endswith(".hwpx"):
@@ -160,15 +163,15 @@ def make_handler(cfg):
                 return self._send(200, b"saved", "text/plain")
             return self._send(404, b"not found", "text/plain")
 
-        def _draft(self):
+        def _api(self, max_body, run):
             if not self._code_ok():
                 return self._json(403, {"error": "연결 번호가 맞지 않아요. 일지 도우미를 켠 컴퓨터 화면의 6자리 숫자를 넣어 주세요."})
             try:
                 n = int(self.headers.get("Content-Length", "0"))
             except ValueError:
                 n = -1
-            if n <= 0 or n > MAX_BODY:
-                return self._json(413, {"error": "일지 내용이 너무 길어요. 메모를 조금 줄여 주세요."})
+            if n <= 0 or n > max_body:
+                return self._json(413, {"error": "내용이 너무 커요. 파일 수를 줄이거나 메모를 조금 줄여 주세요."})
             try:
                 body = json.loads(self.rfile.read(n).decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
@@ -178,8 +181,7 @@ def make_handler(cfg):
             if not limiter.slots.acquire(blocking=False):
                 return self._json(429, {"error": "다른 일지를 채우는 중이에요. 잠시 뒤 다시 눌러 주세요."})
             try:
-                result = ai_writer.draft(body.get("form"), body.get("memo"), cfg["mode"])
-                return self._json(200, result)
+                return self._json(200, run(body))
             except ai_writer.AIError as e:
                 return self._json(e.status, {"error": str(e)})
             except Exception as e:  # 예상하지 못한 오류: 내용은 서버 화면에만 남긴다

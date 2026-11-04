@@ -200,6 +200,43 @@
     padding: 12px 14px; font-size: 14.5px; line-height: 1.7;
   }
   .memo:focus, .field input:focus, .names input:focus { outline: 3px solid var(--primary-soft); border-color: var(--primary); }
+  .memo-small { min-height: 90px; }
+  .plan { margin: 4px 0 14px; padding: 14px; border-radius: 14px; background: var(--sky); }
+  .plan-lead { margin: 0 0 10px; font-size: 14px; }
+  .plan-hint { display: block; margin-top: 8px; color: var(--muted); font-size: 12.5px; }
+  .btn-soft { background: var(--surface); border-color: transparent; color: var(--sky-ink); font-family: var(--font-cute); }
+  .week-field { margin-top: 0; }
+  .week-field select {
+    width: 100%; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface);
+    padding: 9px 12px; font-size: 15px; font-family: var(--font-cute);
+  }
+  .week-sum { margin-top: 10px; font-size: 13.5px; display: grid; gap: 2px; }
+  .week-sum b { font-family: var(--font-cute); font-weight: 400; font-size: 15px; }
+  .week-sum span { color: var(--muted); }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .chip {
+    border: 0; border-radius: 999px; padding: 4px 11px; font-size: 12.5px; cursor: pointer;
+    background: var(--surface); color: var(--ink); line-height: 1.5;
+  }
+  .chip:hover { background: var(--primary-soft); color: var(--primary); }
+  .chip.day-chip { background: var(--bg); }
+  #planReload { margin-top: 8px; }
+  .plan-notes { margin: 10px 0 0; padding: 8px 10px 8px 26px; border-radius: 10px; background: var(--butter); font-size: 12.5px; display: grid; gap: 3px; }
+  .days { display: grid; gap: 10px; }
+  .day { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 6px 10px; align-items: start; }
+  .day-head { grid-row: span 3; display: grid; justify-items: center; gap: 0; padding-top: 6px; }
+  .day-head b { font-family: var(--font-cute); font-weight: 400; font-size: 18px; line-height: 1.2; }
+  .day-head span { font-size: 12px; color: var(--muted); }
+  .day input {
+    width: 100%; border: 1.5px solid var(--line); border-radius: 12px; background: var(--bg);
+    padding: 8px 11px; font-size: 14px;
+  }
+  .day input:focus { outline: 3px solid var(--primary-soft); border-color: var(--primary); background: var(--surface); }
+  .day .kid { font-size: 13px; padding: 6px 11px; }
+  .day .chip-row { margin-top: 0; }
+  .more { margin: 12px 0 0; }
+  .more summary { cursor: pointer; font-size: 14px; color: var(--muted); padding: 4px 0; }
+  .more textarea { margin-top: 6px; }
   .names { margin: 12px 0 0; border-radius: 14px; background: var(--bg); padding: 2px 14px; }
   .names summary { cursor: pointer; padding: 10px 0; font-size: 14.5px; list-style: none; display: flex; align-items: center; gap: 8px; }
   .names summary::-webkit-details-marker { display: none; }
@@ -334,8 +371,37 @@
     <aside class="side">
       <section class="card" id="aiPanel">
         <h2><span class="num n2">2</span>이번 주 메모</h2>
-        <p class="card-sub">요일마다 한 활동과 아이 모습을 짧게 적어 주세요.</p>
-        <textarea class="memo" id="aiMemo" aria-label="이번 주 메모" placeholder="11월 1주 (11.2~11.6) / 주제: 가을 열매&#10;월: 도토리 관찰 / 돋보기 / 민서가 도토리 모자를 발견함&#10;화: 솔방울 크기 순서 / 솔방울 5개 / 하준이가 작은 것부터 늘어놓음&#10;수: …&#10;목: …&#10;금: …"></textarea>
+        <p class="card-sub">요일마다 한 활동만 적어 주세요. 놀이지원과 평가는 알아서 써 드려요.</p>
+
+        <div class="plan" id="planBox">
+          <div id="planEmpty">
+            <p class="plan-lead">월안을 올리면 주제와 목표, 요일별 활동을 정리해 드려요.</p>
+            <label class="btn btn-soft" for="planInput">월안 불러오기</label>
+            <small class="plan-hint">PDF, 사진, 한글 파일 모두 돼요. 사진은 여러 장 한꺼번에 골라 주세요.</small>
+          </div>
+          <div id="planLoading" hidden>
+            <p class="plan-lead" id="planLoadingText">월안을 읽고 있어요…</p>
+            <div class="progress"><i></i></div>
+          </div>
+          <div id="planReady" hidden>
+            <label class="field week-field" for="weekSelect">
+              <span>몇째 주 일지인가요?</span>
+              <select id="weekSelect"></select>
+            </label>
+            <div class="week-sum" id="weekSum"></div>
+            <div class="chip-row" id="weekChips"></div>
+            <ul class="plan-notes" id="planNotes" hidden></ul>
+            <button type="button" class="link-btn" id="planReload">월안 다시 불러오기</button>
+          </div>
+        </div>
+        <input type="file" id="planInput" accept=".pdf,.hwpx,image/*" multiple hidden>
+
+        <div class="days" id="days"></div>
+
+        <details class="more" id="moreBox">
+          <summary>더 적을 말 (선택)</summary>
+          <textarea class="memo memo-small" id="aiMemo" aria-label="더 적을 말" placeholder="예: 수요일은 휴원이에요. 목요일 특성화는 다문화 수업이에요."></textarea>
+        </details>
 
         <details class="names" id="namesBox">
           <summary>아이 이름 가리기 <span class="count empty" id="namesCount">이름 없음</span></summary>
