@@ -38,7 +38,7 @@ cp .env.example .env
 ## 예전 한글 파일(.hwp)
 
 일지와 월안 모두 .hwp 파일을 그대로 열 수 있습니다. 브라우저 안에서 HWPX로 바꾼 뒤 열고, 파일은 어디로도 보내지 않습니다(`web/hwp-convert.js`, `web/hwp-worker.js`).
-변환 엔진은 [rhwp](https://github.com/edwardkim/rhwp) 0.8.7(MIT License, © Edward Kim)이며 jsDelivr의 `@rhwp/core@0.8.7`에서 불러옵니다. Essay(essay.win/hwpx)와 같은 판입니다.
+변환 엔진은 [rhwp](https://github.com/edwardkim/rhwp) 0.8.7(MIT License, © Edward Kim)이며 jsDelivr의 `@rhwp/core@0.8.7`에서 불러옵니다.
 암호가 걸린 파일은 암호를 물어 연 뒤 암호를 푼 HWPX로 바꾸고, 배포용(읽기 전용) 문서는 바꾸지 않습니다.
 
 ## 메모장과 부탁하기

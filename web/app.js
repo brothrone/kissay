@@ -616,7 +616,7 @@
   }
   /* 어디로 보낼지
      - 'server': 이 화면을 띄운 일지 도우미 서버(serve.py, 서버 주인의 키)
-     - 'trial' : Essay 무료체험 서버(api.essay.win, 하루 횟수 제한)
+     - 'trial' : 무료체험 서버(하루 횟수 제한)
      - 'direct': 내 API 키로 브라우저에서 바로
      선생님이 고른 쪽(무료체험/내 API 키)을 따르고, 고를 수 없으면 가능한 쪽으로 간다. */
   const TRIAL_API_DEFAULT = 'https://api.essay.win/v1/trial/journal';
@@ -704,7 +704,7 @@
     $('privacy').textContent = r === 'direct'
       ? '채우기를 누르면 메모와 일지 글이 내 API 키로 Claude(Anthropic)에 바로 전달돼요. 아이 이름은 가려서 보내요.'
       : r === 'trial'
-        ? '채우기를 누르면 메모와 일지 글이 무료체험 서버(essay.win)를 거쳐 Claude로 전달돼요. 서버에는 남지 않고, 아이 이름은 가려서 보내요.'
+        ? '채우기를 누르면 메모와 일지 글이 무료체험 서버를 거쳐 Claude로 전달돼요. 서버에는 남지 않고, 아이 이름은 가려서 보내요.'
         : '채우기를 누르면 메모와 일지 글이 자동 작성 서비스로 전달돼요. 아이 이름은 가려서 보내요.';
     $('aiCodeField').hidden = !(ai.needsCode && r === 'server');
     refreshAiButton();
@@ -803,7 +803,7 @@
     try {
       const r = await fetch('/api/status', { cache: 'no-store' });
       if (r.status === 404) {
-        // 서버 없이 화면만 올린 곳(GitHub Pages, essay.win 등): Essay 무료체험 서버를 확인한다
+        // 서버 없이 화면만 올린 곳(GitHub Pages 등): 무료체험 서버를 확인한다
         await loadRemoteTrial();
         setAiState('off', '');
         return;

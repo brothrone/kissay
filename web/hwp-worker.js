@@ -1,5 +1,5 @@
 // 예전 한글 파일(.hwp) → HWPX 변환. 브라우저 안에서만 바꾸고 파일을 어디로도 보내지 않는다.
-// 엔진: rhwp 0.8.7 (MIT License, © Edward Kim, https://github.com/edwardkim/rhwp) — Essay(essay.win/hwpx)가 쓰는 것과 같은 판.
+// 엔진: rhwp 0.8.7 (MIT License, © Edward Kim, https://github.com/edwardkim/rhwp)
 // 받는 것: { id, bytes(ArrayBuffer), password? }  돌려주는 것: { id, ok, bytes?, loss?, code?, error? }
 //   code: 'password'(암호가 걸림·틀림) | 'distribution'(배포용 문서라 바꾸지 않음) | 'broken'(읽을 수 없음) | 'engine'(엔진을 못 불러옴)
 // 일지 편집기는 암호 걸린 HWPX를 열 수 없으므로, 암호 파일도 암호를 푼 HWPX로 내보낸다.

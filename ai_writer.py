@@ -105,7 +105,7 @@ def _ask_claude(system: str, content, schema: dict, max_tokens: int = 16000, his
         messages=(history or []) + [{"role": "user", "content": content}],
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": schema}},
     )
-    if os.environ.get("KISSAY_THINKING") == "off":  # 선택: 생각 끄기(Essay 무료체험과 같은 조건 시험용)
+    if os.environ.get("KISSAY_THINKING") == "off":  # 선택: 생각 끄기(무료체험과 같은 조건 시험용)
         params["thinking"] = {"type": "disabled"}
     if model in FALLBACK_MODELS:
         params["betas"] = ["server-side-fallback-2026-07-01"]
