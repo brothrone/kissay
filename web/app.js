@@ -1211,8 +1211,8 @@
         if (next) { showDay(next); const a = document.querySelector('.day[data-day="' + next + '"] .act'); if (a) a.focus(); }
       });
       row.append(head, act);
-      const items = info ? (info.items || []).filter((it) => it.activity && it.activity.trim() && it.activity.trim() !== '*') : [];
-      if (items.length || hasNames) {
+      // 월안의 요일별 항목(바깥놀이, 안전교육 등)은 추천으로 띄우지 않는다. 선생님이 적은 활동만 쓴다.
+      if (hasNames) {
         const cr = el('div', 'chip-row');
         if (hasNames) {
           const who = assign[day] || '';
@@ -1224,7 +1224,6 @@
           pick.addEventListener('click', () => cycleKid(day));
           cr.appendChild(pick);
         }
-        items.slice(0, 4).forEach((it) => cr.appendChild(chip(it.category ? it.category + ': ' + it.activity : it.activity, 'day-chip', day)));
         row.appendChild(cr);
       }
       row.appendChild(kid);
@@ -1334,7 +1333,9 @@
       if ((w.free_play || []).length) L.push('자유놀이 교구: ' + w.free_play.join(' / '));
       if ((w.areas || []).length) L.push('영역별 놀이: ' + w.areas.map((a) => a.name + ' - ' + a.activity).join('; '));
       (w.days || []).forEach((d) => {
-        const it = (d.items || []).map((i) => i.category + ' - ' + i.activity).join('; ');
+        // 요일별 항목은 행사·휴원만 보낸다. 바깥놀이·안전교육 같은 줄은 일지에 넣지 않으므로 보내지 않는다.
+        const it = (d.items || []).filter((i) => /행사|휴원|휴업|방학/.test((i.category || '') + (i.activity || '')))
+          .map((i) => i.category + ' - ' + i.activity).join('; ');
         if (it) L.push(d.day + '(' + d.date + '): ' + it);
       });
       if ((w.weekly || []).length) L.push('한 주 공통: ' + w.weekly.map((x) => x.category + ' - ' + x.activity).join('; '));
