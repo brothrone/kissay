@@ -516,6 +516,7 @@
         toast('일지를 열었어요. 오른쪽에 이번 주 메모를 적어 주세요.');
       }
       Recent.put(state.doc.fileName, state.doc.rawBuf, 'opened');
+      Stats.track('open', { hwp: converted ? 1 : 0, cells: allUnits().length });
     } catch (err) {
       console.error(err);
       toast(err.message || String(err), true);
@@ -711,6 +712,7 @@
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
         toast('저장했어요. 내려받은 파일을 한글에서 열어 보세요.');
+        Stats.track('save', { changed: allUnits().filter((u) => E.unitChanged(u)).length, auto: ai.aiUnits.size });
       }
     } catch (err) {
       console.error(err);
@@ -800,6 +802,50 @@
   const TRIAL_API = (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && new URLSearchParams(location.search).get('trialApi')) || TRIAL_API_DEFAULT;
   // 예전에 넣어 둔 API 키와 선택값은 더 쓰지 않으므로 지운다.
   try { localStorage.removeItem('kissay.apiKey'); localStorage.removeItem('kissay.useMode'); } catch (e) { /* 무시 */ }
+  /* ---------- 사용 통계(내용 없이 '무엇을 눌렀는지'만) ----------
+     보내는 것: 누른 단추의 이름(id·종류), 채우기·부탁하기·월안 읽기의 성공 여부와 걸린 시간, 바뀐 칸 수.
+     보내지 않는 것: 일지 글, 메모, 부탁한 말, 아이 이름, 파일 이름, 파일 내용. */
+  const Stats = (() => {
+    const local = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+    const on = !inArtifact && (!local || new URLSearchParams(location.search).has('stats'));
+    const sid = Math.random().toString(36).slice(2, 12); // 이 탭에서만 쓰는 임의 번호(사람을 구별하지 않음)
+    const t0 = Date.now();
+    let queue = [];
+    let timer = 0;
+    function track(name, d) {
+      if (!on) return;
+      queue.push(Object.assign({ n: String(name).slice(0, 40), t: Math.round((Date.now() - t0) / 1000) }, d ? { d } : {}));
+      if (queue.length >= 40) flush();
+      else if (!timer) timer = setTimeout(flush, 8000);
+    }
+    function flush() {
+      clearTimeout(timer); timer = 0;
+      if (!queue.length) return;
+      const body = JSON.stringify({ sid, w: window.innerWidth < 700 ? 'phone' : window.innerWidth < 1241 ? 'mid' : 'wide', events: queue.splice(0) });
+      try {
+        // text/plain 으로 보내 사전 요청 없이 간다. 실패해도 쓰는 데는 지장이 없다.
+        if (navigator.sendBeacon && navigator.sendBeacon(TRIAL_API + '/event', new Blob([body], { type: 'text/plain' }))) return;
+        fetch(TRIAL_API + '/event', { method: 'POST', body, keepalive: true, headers: { 'Content-Type': 'text/plain' } }).catch(() => {});
+      } catch (e) { /* 무시 */ }
+    }
+    // 누른 것: 글자는 읽지 않고 요소의 id 나 종류(class)만 적는다.
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('button, label.btn, summary, a, [role="tab"]');
+      if (!b) return;
+      let key = b.id || b.getAttribute('for');
+      if (!key) {
+        // id 가 없으면 '종류@들어 있는 곳' 으로 적는다(예: fold-btn@saveCard, day-tab@days).
+        const box = b.closest('[id]');
+        key = ((b.className && String(b.className).split(' ')[0]) || b.tagName.toLowerCase()) + (box ? '@' + box.id : '');
+      }
+      track('click', { k: String(key).slice(0, 40) });
+    }, true);
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+    track('visit');
+    return { track, flush };
+  })();
+
   function sharedRoute() {
     if (ai.mode === 'api' || ai.mode === 'mock') return 'server';
     if (ai.remote && !inArtifact) return 'trial';
@@ -888,6 +934,17 @@
 
   // 자동 채우기 호출(일지 채우기 'draft', 월안 정리 'plan')
   async function callAuto(kind, payload) {
+    const started = Date.now();
+    try {
+      const data = await callAutoRaw(kind, payload);
+      Stats.track(kind, { ok: 1, sec: Math.round((Date.now() - started) / 1000), cells: (data.cells || []).length, weeks: (data.weeks || []).length });
+      return data;
+    } catch (err) {
+      Stats.track(kind, { ok: 0, sec: Math.round((Date.now() - started) / 1000) });
+      throw err;
+    }
+  }
+  async function callAutoRaw(kind, payload) {
     const r = route();
     if (r === 'trial') {
       if (kind === 'plan' && (payload.files || []).length > 10) {
