@@ -93,6 +93,7 @@
       anim.oncancel = () => { d.style.overflow = ''; };
     });
   }
+  makeFold($('docsCard'), $('docsCard').querySelector(':scope > h2'), 'docs', true);
   makeFold($('aiPanel'), $('aiPanel').querySelector(':scope > h2'), 'memo', true);
   makeFold($('saveCard'), $('saveCard').querySelector(':scope > h2'), 'save', false);
   makeFold($('usageCard'), $('usageCard').querySelector(':scope > h2'), 'usage', false);
@@ -494,6 +495,7 @@
     state.editing = null;
     $('fileName').textContent = fileName;
     $('fileName').title = fileName;
+    $('docSlotName').textContent = fileName;
     $('previewImg').hidden = !previewUrl;
     $('previewEmpty').hidden = !!previewUrl;
     if (previewUrl) $('previewImg').src = previewUrl;
@@ -1351,6 +1353,11 @@
     $('planEmpty').hidden = has || plan.busy;
     $('planLoading').hidden = !plan.busy;
     $('planReady').hidden = !has || plan.busy;
+    $('planTag').textContent = plan.busy ? '읽는 중' : has ? '불러옴' : '아직 없음';
+    $('planTag').className = 'slot-tag' + (has ? ' on' : '');
+    $('homePlanState').textContent = plan.busy ? '읽고 있어요…' : has ? plan.weeks.length + '주 불러왔어요' : '선택';
+    if (folds.docs) folds.docs.badge(has ? '일지 · 월안' : '월안 없음', has ? 'mint' : '');
+    if (plan.busy && folds.docs) folds.docs.open();
     if (has) {
       const sel = $('weekSelect');
       sel.textContent = '';

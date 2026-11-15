@@ -132,7 +132,8 @@
   .home-actions .btn-big { transition: transform 0.12s; }
   .home-actions .btn-big:hover { transform: translateY(-2px); }
   .home-actions .btn-big:active { transform: scale(0.97); }
-  #resumeBtn { flex-direction: column; gap: 0; line-height: 1.25; padding-block: 8px; }
+  #homePlanBtn small { display: block; font-family: var(--font-body); font-size: 12px; color: var(--muted); }
+  #homePlanBtn, #resumeBtn { flex-direction: column; gap: 0; line-height: 1.25; padding-block: 8px; }
   #resumeBtn small { display: block; font-family: var(--font-body); font-size: 12px; color: var(--muted); max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .home-side { display: grid; gap: 16px; }
   .recent { background: var(--surface); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); animation: rise 0.45s 0.08s cubic-bezier(.2,.8,.2,1) both; }
@@ -236,7 +237,18 @@
   }
   .memo:focus, .field input:focus, .names input:focus { outline: 3px solid var(--primary-soft); border-color: var(--primary); }
   .memo-small { min-height: 90px; }
-  .plan { margin: 4px 0 14px; padding: 14px; border-radius: 14px; background: var(--sky); }
+  .plan { margin: 6px 0 0; padding: 14px; border-radius: 14px; background: var(--sky); }
+  .doc-slot { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 10px 12px; border-radius: 14px; background: var(--bg); }
+  .slot-ico { flex: none; width: 36px; height: 36px; border-radius: 11px; background: var(--surface); color: var(--sky-ink); display: grid; place-items: center; }
+  .slot-ico svg { width: 19px; height: 19px; }
+  .slot-txt { flex: 1; min-width: 0; display: grid; }
+  .slot-txt b { font-family: var(--font-cute); font-weight: 400; font-size: 15px; }
+  .slot-txt small { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .slot-btn { flex: none; padding: 6px 12px; font-size: 14px; }
+  .doc-slot-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; }
+  .doc-slot-head b { font-family: var(--font-cute); font-weight: 400; font-size: 15px; }
+  .slot-tag { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--bg); color: var(--muted); }
+  .slot-tag.on { background: var(--mint); color: var(--mint-ink); }
   .plan-lead { margin: 0 0 10px; font-size: 14px; }
   .plan-hint { display: block; margin-top: 8px; color: var(--muted); font-size: 12.5px; }
   .btn-soft { background: var(--surface); border-color: transparent; color: var(--sky-ink); font-family: var(--font-cute); }
@@ -577,6 +589,7 @@
         <p>지난 일지를 열고 요일별 활동만 적으면, 쓰던 양식 그대로 이번 주 일지를 채워 드려요.</p>
         <div class="home-actions">
           <label class="btn btn-primary btn-big" for="fileInput">일지 파일 열기</label>
+          <label class="btn btn-big" for="planInput" id="homePlanBtn">월안 올리기 <small id="homePlanState">선택</small></label>
           <button type="button" class="btn btn-big" id="resumeBtn" hidden>쓰던 일지로 돌아가기 <small id="resumeName"></small></button>
         </div>
         <p class="hint">파일을 이 창에 끌어다 놓아도 돼요. 한글 파일(.hwpx, .hwp) 모두 열려요.</p>
@@ -588,7 +601,7 @@
           <small>이 컴퓨터의 이 브라우저에만 보관돼요. 여럿이 쓰는 컴퓨터라면 다 쓰고 지워 주세요.</small>
         </section>
         <ol class="steps">
-          <li class="step"><span class="num n1">1</span><div><b>지난 일지 열기</b><span>쓰던 양식 그대로 불러와요</span></div></li>
+          <li class="step"><span class="num n1">1</span><div><b>지난 일지와 월안 넣기</b><span>쓰던 양식 그대로 불러와요. 월안은 PDF, 사진, 한글 파일 모두 돼요</span></div></li>
           <li class="step"><span class="num n2">2</span><div><b>요일별 활동 적기</b><span>놀이지원과 평가는 알아서 써 드려요</span></div></li>
           <li class="step"><span class="num n3">3</span><div><b>확인하고 저장하기</b><span>고칠 곳은 말로 부탁하고, 한글 파일로 저장해요</span></div></li>
         </ol>
@@ -660,13 +673,17 @@
 
     <aside class="side">
       <div class="pane" id="paneFill">
-      <section class="card" id="aiPanel">
-        <h2><span class="num n2">2</span>이번 주 메모</h2>
-        <p class="card-sub">요일마다 한 활동만 적어 주세요. 놀이지원과 평가는 알아서 써 드려요.</p>
-
+      <section class="card" id="docsCard">
+        <h2><span class="num n1">1</span>필요한 문서</h2>
+        <div class="doc-slot">
+          <span class="slot-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20.5H7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M10 12h5M10 15.5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+          <div class="slot-txt"><b>지난 일지</b><small id="docSlotName">열려 있어요</small></div>
+          <label class="btn btn-soft slot-btn" for="fileInput">바꾸기</label>
+        </div>
+        <div class="doc-slot-head"><b>월안 (교육계획안)</b><span class="slot-tag" id="planTag">아직 없음</span></div>
         <div class="plan" id="planBox">
           <div id="planEmpty">
-            <p class="plan-lead">월안을 올리면 주제와 목표, 요일별 활동을 정리해 드려요.</p>
+            <p class="plan-lead">월안을 올리면 이번 주 주제와 목표를 일지에 그대로 옮겨 드려요.</p>
             <label class="btn btn-soft" for="planInput">월안 불러오기</label>
             <small class="plan-hint">PDF, 사진, 한글 파일(.hwp, .hwpx) 모두 돼요. 사진은 여러 장 한꺼번에 골라 주세요.</small>
           </div>
@@ -686,6 +703,12 @@
           </div>
         </div>
         <input type="file" id="planInput" accept=".pdf,.hwpx,.hwp,image/*" multiple hidden>
+      </section>
+
+      <section class="card" id="aiPanel">
+        <h2><span class="num n2">2</span>이번 주 활동</h2>
+        <p class="card-sub">요일마다 한 활동만 적어 주세요. 놀이지원과 평가는 알아서 써 드려요.</p>
+
 
         <div class="days" id="days"></div>
 
