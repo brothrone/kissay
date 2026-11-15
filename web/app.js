@@ -861,6 +861,31 @@
     refreshAiButton();
   }
 
+  /* 수업일수 이어 세기: 요일 칸의 "(150일)" 같은 숫자가 지난 일지에서 이어지지 않았으면
+     지난 일지의 마지막 값 다음부터 문서 순서대로 다시 센다. 숫자 줄이 없어진 칸(휴원 등)은 건너뛴다. */
+  const DAYCOUNT = /^(\s*\(\s*)(\d{1,3})(\s*일\s*\)\s*)$/;
+  function fixDayCounts() {
+    const cells = [];
+    for (const u of allUnits()) {
+      const old = (u.origLines || []).map((l) => DAYCOUNT.exec(l)).find(Boolean); // 연 파일(지난 일지)의 값 기준
+      if (!old || !u.editable) continue;
+      const idx = u.lines.findIndex((l) => DAYCOUNT.test(l));
+      cells.push({ u, old: +old[2], idx, now: idx >= 0 ? +DAYCOUNT.exec(u.lines[idx])[2] : null });
+    }
+    if (cells.length < 2) return [];
+    const last = Math.max(...cells.map((c) => c.old));
+    const live = cells.filter((c) => c.idx >= 0);
+    const ok = live.length > 0 && live.every((c, i) => c.now === last + 1 + i);
+    if (ok) return [];
+    const changed = [];
+    live.forEach((c, i) => {
+      const m = DAYCOUNT.exec(c.u.lines[c.idx]);
+      const next = m[1] + (last + 1 + i) + m[3];
+      if (c.u.lines[c.idx] !== next) { c.u.lines[c.idx] = next; changed.push(c.u); }
+    });
+    return changed;
+  }
+
   // 자동 채우기 호출(일지 채우기 'draft', 월안 정리 'plan')
   async function callAuto(kind, payload) {
     const r = route();
@@ -1003,11 +1028,14 @@
         ai.aiUnits.add(u.id);
         applied++;
       }
+      const recounted = fixDayCounts();
+      recounted.forEach((u) => { if (!ai.aiUnits.has(u.id)) { ai.aiUnits.add(u.id); applied++; } });
       for (const id of new Set([...prevAi, ...ai.aiUnits])) { const u = units.get(id); if (u) rerenderUnit(u); }
       updateSummary();
       $('report').hidden = true;
 
-      const notes = (data.notes || []).map((n) => masker.unmask(n));
+      let notes = (data.notes || []).map((n) => masker.unmask(n));
+      if (recounted.length) notes = notes.filter((t) => !/수업\s*일수/.test(t)); // 숫자를 직접 이어 셌으므로 어긋난 안내는 뺀다
       $('aiSummary').textContent = applied
         ? applied + '곳을 채웠어요. 노란 점선 칸을 읽어 보고, 고칠 곳은 칸을 눌러 바로 고치거나 말로 부탁해 주세요.'
         : '채울 곳을 찾지 못했어요. 메모를 조금 더 자세히 적어 주세요.';
