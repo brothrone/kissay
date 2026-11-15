@@ -1460,8 +1460,8 @@
       if ((w.free_play || []).length) L.push('자유놀이 교구: ' + w.free_play.join(' / '));
       if ((w.areas || []).length) L.push('영역별 놀이: ' + w.areas.map((a) => a.name + ' - ' + a.activity).join('; '));
       (w.days || []).forEach((d) => {
-        // 요일별 항목은 행사·휴원만 보낸다. 바깥놀이·안전교육 같은 줄은 일지에 넣지 않으므로 보내지 않는다.
-        const it = (d.items || []).filter((i) => /행사|휴원|휴업|방학/.test((i.category || '') + (i.activity || '')))
+        // 요일별 항목은 휴원만 보낸다. 바깥놀이·안전교육·행사는 일지에 넣지 않으므로 보내지 않는다.
+        const it = (d.items || []).filter((i) => /휴원|휴업|방학/.test((i.category || '') + ' ' + (i.activity || '')))
           .map((i) => i.category + ' - ' + i.activity).join('; ');
         if (it) L.push(d.day + '(' + d.date + '): ' + it);
       });
