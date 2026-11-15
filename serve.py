@@ -226,7 +226,7 @@ def make_handler(cfg):
                 return self._json(429, {"error": "조금 쉬었다가 1분 뒤에 다시 눌러 주세요."})
             who = self.client_address[0]
             if not trial.take(who):
-                return self._json(429, {"error": f"오늘 무료체험 {cfg['trial']}번을 다 썼어요. 내 API 키를 넣으면 계속 쓸 수 있어요.",
+                return self._json(429, {"error": f"오늘 무료체험 {cfg['trial']}번을 다 썼어요. 내일 다시 쓸 수 있어요.",
                                         "code": "trial_used_up", "trial": {"limit": cfg["trial"], "remaining": 0}})
             if not limiter.slots.acquire(blocking=False):
                 trial.give_back(who)
@@ -303,7 +303,7 @@ def main():
     print(f"HWPX 일지 편집기: http://127.0.0.1:{a.port}")
     print({"api": "자동 채우기: 켜짐 (Claude API)", "mock": "자동 채우기: 연습 모드", "off": "자동 채우기: 꺼짐 - " + reason}[mode])
     if cfg["trial"] and mode != "off":
-        print(f"무료체험: 접속한 곳마다 하루 {cfg['trial']}번 (그 뒤에는 각자 API 키를 넣어 사용)")
+        print(f"무료체험: 접속한 곳마다 하루 {cfg['trial']}번")
     if a.lan:
         ip = lan_ip()
         if ip:

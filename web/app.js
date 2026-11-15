@@ -31,6 +31,75 @@
     return e;
   }
 
+  /* ---------- 접고 펴기(카드·메모장 칸) ---------- */
+  const REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const CHEV = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const folds = {};
+  let activeDay = '월'; // 이번 주 메모에서 지금 펼친 요일
+  function readFold(key) { try { return localStorage.getItem('kissay.fold.' + key); } catch (e) { return null; } }
+  function makeFold(box, header, key, defaultOpen) {
+    const btn = el('button', 'fold-btn');
+    btn.type = 'button';
+    while (header.firstChild) btn.appendChild(header.firstChild);
+    const badge = el('span', 'fold-badge');
+    badge.hidden = true;
+    const chev = el('span', 'fold-chev');
+    chev.innerHTML = CHEV;
+    btn.append(badge, chev);
+    header.appendChild(btn);
+    const body = el('div', 'fold-body');
+    const inner = el('div', 'fold-inner');
+    while (header.nextSibling) inner.appendChild(header.nextSibling);
+    body.appendChild(inner);
+    box.appendChild(body);
+    box.classList.add('fold');
+    let timer = 0;
+    function set(open, remember) {
+      box.classList.add('animating');
+      box.classList.toggle('closed', !open);
+      body.inert = !open;
+      btn.setAttribute('aria-expanded', String(open));
+      clearTimeout(timer);
+      timer = setTimeout(() => box.classList.remove('animating'), REDUCED ? 0 : 380);
+      if (remember) { try { localStorage.setItem('kissay.fold.' + key, open ? '1' : '0'); } catch (e) { /* 무시 */ } }
+    }
+    const saved = readFold(key);
+    set(saved === null ? defaultOpen : saved === '1', false);
+    btn.addEventListener('click', () => set(box.classList.contains('closed'), true));
+    const api = {
+      set, open: () => set(true, false),
+      isOpen: () => !box.classList.contains('closed'),
+      badge(text, tone) { badge.textContent = text || ''; badge.hidden = !text; badge.className = 'fold-badge' + (tone ? ' ' + tone : ''); },
+    };
+    folds[key] = api;
+    return api;
+  }
+  // <details>를 부드럽게 펴고 접는다.
+  function smoothDetails(d) {
+    const sum = d.querySelector(':scope > summary');
+    if (!sum) return;
+    let anim = null;
+    sum.addEventListener('click', (e) => {
+      if (REDUCED || !d.animate) return;
+      e.preventDefault();
+      if (anim) anim.cancel();
+      const start = d.offsetHeight;
+      const opening = !d.open;
+      if (opening) d.open = true;
+      const end = opening ? d.scrollHeight : sum.offsetHeight;
+      d.style.overflow = 'hidden';
+      anim = d.animate({ height: [start + 'px', end + 'px'] }, { duration: 280, easing: 'cubic-bezier(.2,.8,.2,1)' });
+      anim.onfinish = () => { anim = null; if (!opening) d.open = false; d.style.overflow = ''; };
+      anim.oncancel = () => { d.style.overflow = ''; };
+    });
+  }
+  makeFold($('aiPanel'), $('aiPanel').querySelector(':scope > h2'), 'memo', true);
+  makeFold($('saveCard'), $('saveCard').querySelector(':scope > h2'), 'save', false);
+  makeFold($('usageCard'), $('usageCard').querySelector(':scope > h2'), 'usage', false);
+  // 좁은 화면에서는 '내 메모'를 접어 두고 시작한다.
+  document.querySelectorAll('.memo-pad .note-sec').forEach((sec, i) => makeFold(sec, sec.querySelector('.note-head'), i ? 'note' : 'kids', i === 0 || window.innerWidth > 1000));
+  document.querySelectorAll('details.names, details.more').forEach(smoothDetails);
+
   /* ---------- 서식 → CSS ---------- */
   const SERIF = /바탕|명조|궁서|Batang|Myeongjo|Times|serif/i;
   function fontStack(cp) {
@@ -233,6 +302,7 @@
     const list = $('changes');
     list.textContent = '';
     $('changesEmpty').hidden = changed.length > 0;
+    if (folds.save) folds.save.badge(changed.length ? '바뀐 곳 ' + changed.length : '', changed.length ? 'mint' : '');
     for (const u of changed) {
       const entry = state.unitEls.get(u.id);
       const li = el('li');
@@ -420,7 +490,7 @@
     if (prv) previewUrl = URL.createObjectURL(new Blob([await prv.async('uint8array')], { type: 'image/png' }));
 
     if (state.doc && state.doc.previewUrl) URL.revokeObjectURL(state.doc.previewUrl);
-    state.doc = { fileName, zip, order, header, sectionPaths, sections, previewUrl };
+    state.doc = { fileName, zip, order, header, sectionPaths, sections, previewUrl, rawBuf: buf };
     state.editing = null;
     $('fileName').textContent = fileName;
     $('fileName').title = fileName;
@@ -445,6 +515,7 @@
       } else {
         toast('일지를 열었어요. 오른쪽에 이번 주 메모를 적어 주세요.');
       }
+      Recent.put(state.doc.fileName, state.doc.rawBuf, 'opened');
     } catch (err) {
       console.error(err);
       toast(err.message || String(err), true);
@@ -462,6 +533,112 @@
     const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if (f) openFile(f);
   });
+
+  /* ---------- 최근 일지(이 브라우저에만 보관) ---------- */
+  const Recent = (() => {
+    const MAX = 6;
+    let dbp = null;
+    function db() {
+      if (!dbp) dbp = new Promise((res, rej) => {
+        const r = indexedDB.open('kissay', 1);
+        r.onupgradeneeded = () => r.result.createObjectStore('recent', { keyPath: 'id' });
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+      return dbp;
+    }
+    async function tx(mode, fn) {
+      const d = await db();
+      return new Promise((res, rej) => {
+        const t = d.transaction('recent', mode);
+        const out = fn(t.objectStore('recent'));
+        t.oncomplete = () => res(out && 'result' in out ? out.result : undefined);
+        t.onerror = t.onabort = () => rej(t.error);
+      });
+    }
+    async function list() {
+      try { return ((await tx('readonly', (s) => s.getAll())) || []).sort((a, b) => b.at - a.at); } catch (e) { return []; }
+    }
+    async function put(name, bytes, kind) {
+      if (!name || !bytes) return;
+      try {
+        await tx('readwrite', (s) => s.put({ id: name, name, kind, at: Date.now(), size: bytes.byteLength, bytes }));
+        const all = await list();
+        for (const old of all.slice(MAX)) await tx('readwrite', (s) => s.delete(old.id));
+      } catch (e) { /* 보관하지 못해도 쓰는 데는 지장 없다 */ }
+      render();
+    }
+    async function remove(id) { try { await tx('readwrite', (s) => s.delete(id)); } catch (e) { /* 무시 */ } render(); }
+    async function clear() { try { await tx('readwrite', (s) => s.clear()); } catch (e) { /* 무시 */ } render(); }
+    function ago(t) {
+      const m = Math.round((Date.now() - t) / 60000);
+      if (m < 1) return '방금';
+      if (m < 60) return m + '분 전';
+      if (m < 60 * 24) return Math.round(m / 60) + '시간 전';
+      const d = Math.round(m / 1440);
+      if (d < 31) return d + '일 전';
+      const dt = new Date(t);
+      return (dt.getMonth() + 1) + '월 ' + dt.getDate() + '일';
+    }
+    async function render() {
+      const items = await list();
+      const box = $('recentBox');
+      const ul = $('recentList');
+      ul.textContent = '';
+      box.hidden = items.length === 0;
+      items.forEach((it, i) => {
+        const li = el('li');
+        li.style.animationDelay = (i * 45) + 'ms';
+        const open = el('button', 'recent-open');
+        open.type = 'button';
+        const ico = el('span', 'recent-ico' + (it.kind === 'saved' ? ' saved' : ''));
+        ico.innerHTML = it.kind === 'saved'
+          ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+          : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l4 4V20.5H7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M10 12h5M10 15.5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+        const txt = el('span', 'recent-txt');
+        txt.append(el('b', null, it.name), el('small', null, (it.kind === 'saved' ? '저장한 일지' : '열어 본 일지') + ' · ' + ago(it.at)));
+        open.append(ico, txt);
+        open.title = '눌러서 이 일지 열기';
+        open.addEventListener('click', async () => {
+          try {
+            await openArrayBuffer(it.bytes.slice(0), it.name);
+            toast('일지를 열었어요. 오른쪽에 이번 주 메모를 적어 주세요.');
+          } catch (err) { console.error(err); toast(err.message || String(err), true); }
+        });
+        const del = el('button', 'recent-del', '×');
+        del.type = 'button';
+        del.setAttribute('aria-label', it.name + ' 목록에서 지우기');
+        del.addEventListener('click', () => remove(it.id));
+        li.append(open, del);
+        ul.appendChild(li);
+      });
+    }
+    return { put, render, clear };
+  })();
+  $('recentClear').addEventListener('click', () => { Recent.clear(); toast('최근 일지 목록을 모두 지웠어요.'); });
+  Recent.render();
+
+  /* ---------- 처음 화면으로 · 쓰던 일지로 ---------- */
+  function goHome() {
+    if (state.editing) commitEdit();
+    setChatOpen(false);
+    $('workspace').hidden = true;
+    $('topActions').hidden = true;
+    $('dropzone').hidden = false;
+    $('resumeBtn').hidden = !state.doc;
+    if (state.doc) $('resumeName').textContent = state.doc.fileName;
+    Recent.render();
+    window.scrollTo(0, 0);
+  }
+  function resumeDoc() {
+    if (!state.doc) return;
+    $('dropzone').hidden = true;
+    $('workspace').hidden = false;
+    $('topActions').hidden = false;
+    fitZoom();
+  }
+  $('homeBtn').addEventListener('click', goHome);
+  $('resumeBtn').addEventListener('click', resumeDoc);
 
   /* ---------- 저장 ---------- */
   function linesegMode() { return $('linesegKeep').checked ? 'keep' : 'strip'; }
@@ -511,6 +688,7 @@
     btns.forEach((b) => (b.disabled = true));
     try {
       const { blob, report } = await exportBlob();
+      blob.arrayBuffer().then((b) => Recent.put(baseName() + '.hwpx', b, 'saved')).catch(() => {});
       const rep = $('report');
       rep.textContent = report.files.length
         ? '다시 쓴 파일: ' + report.files.join(', ') + '\n바뀐 칸 ' + report.units + '곳, 다시 쓴 문단 ' + report.paragraphs + '개\n나머지 파일과 문단은 원본 그대로입니다.'
@@ -587,7 +765,7 @@
     const active = document.activeElement;
     let t = active && active.matches && active.matches(NAME_TARGETS) ? active
       : (lastTextField && document.body.contains(lastTextField) ? lastTextField : null);
-    if (!t) t = !$('paneChat').hidden ? $('chatInput') : document.querySelector('.day .kid');
+    if (!t) t = !$('chatWin').hidden ? $('chatInput') : (document.querySelector('.day:not([hidden]) .kid') || document.querySelector('.day .kid'));
     if (!t) return;
     const start = t.selectionStart != null ? t.selectionStart : t.value.length;
     const end = t.selectionEnd != null ? t.selectionEnd : t.value.length;
@@ -616,28 +794,18 @@
   }
   /* 어디로 보낼지
      - 'server': 이 화면을 띄운 일지 도우미 서버(serve.py, 서버 주인의 키)
-     - 'trial' : 무료체험 서버(하루 횟수 제한)
-     - 'direct': 내 API 키로 브라우저에서 바로
-     선생님이 고른 쪽(무료체험/내 API 키)을 따르고, 고를 수 없으면 가능한 쪽으로 간다. */
+     - 'trial' : 무료체험 서버(하루 횟수 제한) */
   const TRIAL_API_DEFAULT = 'https://api.essay.win/v1/trial/journal';
   // 개발용: 이 컴퓨터(localhost)에서 열었을 때만 ?trialApi= 로 다른 체험 서버를 시험할 수 있다.
   const TRIAL_API = (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && new URLSearchParams(location.search).get('trialApi')) || TRIAL_API_DEFAULT;
-  const MODE_KEY = 'kissay.useMode';
-  function getPref() { try { return localStorage.getItem(MODE_KEY) || ''; } catch (e) { return ''; } }
-  function setPref(v) { try { localStorage.setItem(MODE_KEY, v); } catch (e) { /* 무시 */ } }
+  // 예전에 넣어 둔 API 키와 선택값은 더 쓰지 않으므로 지운다.
+  try { localStorage.removeItem('kissay.apiKey'); localStorage.removeItem('kissay.useMode'); } catch (e) { /* 무시 */ }
   function sharedRoute() {
     if (ai.mode === 'api' || ai.mode === 'mock') return 'server';
     if (ai.remote && !inArtifact) return 'trial';
     return null;
   }
-  function route() {
-    const hasKey = !inArtifact && !!ClaudeDirect.getKey();
-    const shared = sharedRoute();
-    const pref = getPref() || (hasKey ? 'key' : 'shared');
-    if (pref === 'key' && hasKey) return 'direct';
-    if (shared) return shared;
-    return hasKey ? 'direct' : null;
-  }
+  function route() { return sharedRoute(); }
   async function loadRemoteTrial() {
     ai.remote = null;
     if (inArtifact) return;
@@ -649,62 +817,40 @@
       ai.remote = { limit: s.limit, capped: !!s.capped };
       // limit 이 숫자가 아니면(null) 사람마다 횟수 제한이 없는 것이라 남은 횟수 줄을 보이지 않는다.
       ai.trial = typeof s.limit === 'number' ? { limit: s.limit, remaining: s.capped ? 0 : Math.max(0, +s.remaining || 0) } : null;
-    } catch (e) { /* 체험 서버가 없거나 이 주소를 허용하지 않음: 내 API 키만 쓴다 */ }
+    } catch (e) { /* 체험 서버가 없거나 이 주소를 허용하지 않음 */ }
   }
   function refreshAiButton() {
     $('aiRun').disabled = ai.busy || !state.doc || !route();
   }
-  function openKeyBox() {
-    if (inArtifact) return;
-    $('keyBox').hidden = false;
-    $('keyBox').open = true;
-  }
   function renderUsage() {
     const r = route();
-    const shared = sharedRoute();
-    const sw = $('modeSwitch');
-    sw.hidden = !shared || inArtifact;
-    if (!sw.hidden) {
-      $('modeShared').textContent = ai.trial ? '무료체험' : '일지 도우미';
-      $('modeShared').classList.toggle('on', r === shared);
-      $('modeKey').classList.toggle('on', r === 'direct');
-      $('modeShared').setAttribute('aria-pressed', String(r === shared));
-      $('modeKey').setAttribute('aria-pressed', String(r === 'direct'));
-    }
-    $('keyBox').hidden = inArtifact;
-    $('keyClear').hidden = !ClaudeDirect.getKey();
     const u = $('usage');
     u.textContent = '';
-    u.className = 'usage' + (r === 'direct' ? ' mine' : '');
-    if (r === 'direct') {
-      u.append(el('b', null, '내 API 키'), document.createTextNode('로 쓰고 있어요. 횟수 제한이 없어요.'));
-      u.hidden = false;
-    } else if ((r === 'server' || r === 'trial') && ai.trial) {
+    u.className = 'usage';
+    if (r && ai.trial) {
       if (ai.trial.remaining > 0) {
         u.append(document.createTextNode('오늘 무료체험 '), el('b', null, ai.trial.remaining + '/' + ai.trial.limit + '번'),
-          document.createTextNode(' 남았어요. 다 쓰면 내 API 키로 계속 쓸 수 있어요.'));
+          document.createTextNode(' 남았어요.'));
       } else {
         u.append(document.createTextNode('오늘 무료체험 '), el('b', null, ai.trial.limit + '번'),
-          document.createTextNode('을 다 썼어요. 내일 다시 쓰거나, 아래에 내 API 키를 넣으면 바로 이어서 쓸 수 있어요.'));
+          document.createTextNode('을 다 썼어요. 내일 다시 쓸 수 있어요. 칸을 직접 고치고 저장하는 건 그대로 할 수 있어요.'));
       }
       u.hidden = false;
-      if (!ai.trial.remaining) openKeyBox();
     } else u.hidden = true;
     let msg = '';
-    if (r === 'trial' && ai.remote && ai.remote.capped) msg = '오늘은 무료체험을 쓰는 분이 많아 마감됐어요. 내 API 키를 넣으면 바로 쓸 수 있어요.';
+    if (r === 'trial' && ai.remote && ai.remote.capped) msg = '오늘은 무료체험을 쓰는 분이 많아 마감됐어요. 내일 다시 써 주세요.';
     else if (r === 'server' && ai.mode === 'mock') msg = '지금은 연습 모드예요. 글을 새로 쓰지 않고 예시만 넣어요.';
-    else if (!r) {
-      msg = inArtifact ? ai.reason : '아래 "내 API 키로 쓰기"에 키를 넣으면 이 주소에서도 자동으로 채울 수 있어요. 칸을 직접 고치고 저장하는 건 그대로 할 수 있어요.';
-      if (!inArtifact) openKeyBox();
-    }
+    else if (!r) msg = inArtifact ? ai.reason : '지금은 자동으로 채우기에 연결하지 못했어요. 인터넷 연결을 확인하고 새로고침해 주세요. 칸을 직접 고치고 저장하는 건 그대로 할 수 있어요.';
     $('aiReason').textContent = msg;
     $('aiReason').hidden = !msg;
-    $('chatPrivacy').textContent = r === 'direct'
-      ? '부탁과 일지 글은 내 API 키로 Claude(Anthropic)에 바로 전달돼요. 아이 이름은 가려서 보내요.'
-      : '부탁과 일지 글은 아이 이름을 가려서 전달돼요. 서버에는 남지 않아요.';
-    $('privacy').textContent = r === 'direct'
-      ? '채우기를 누르면 메모와 일지 글이 내 API 키로 Claude(Anthropic)에 바로 전달돼요. 아이 이름은 가려서 보내요.'
-      : r === 'trial'
+    if (folds.usage) {
+      if (ai.trial && r) folds.usage.badge(ai.trial.remaining > 0 ? ai.trial.remaining + '번 남음' : '다 씀', ai.trial.remaining > 0 ? 'mint' : 'warn');
+      else if (r === 'trial' && ai.remote && ai.remote.capped) folds.usage.badge('오늘 마감', 'warn');
+      else folds.usage.badge(r ? '쓸 수 있어요' : '연결 안 됨', r ? 'mint' : 'warn');
+      if (msg || (ai.trial && !ai.trial.remaining)) folds.usage.open();
+    }
+    $('chatPrivacy').textContent = '부탁과 일지 글은 아이 이름을 가려서 전달돼요. 서버에는 남지 않아요.';
+    $('privacy').textContent = r === 'trial'
         ? '채우기를 누르면 메모와 일지 글이 무료체험 서버를 거쳐 Claude로 전달돼요. 서버에는 남지 않고, 아이 이름은 가려서 보내요.'
         : '채우기를 누르면 메모와 일지 글이 자동 작성 서비스로 전달돼요. 아이 이름은 가려서 보내요.';
     $('aiCodeField').hidden = !(ai.needsCode && r === 'server');
@@ -714,15 +860,9 @@
   // 자동 채우기 호출(일지 채우기 'draft', 월안 정리 'plan')
   async function callAuto(kind, payload) {
     const r = route();
-    if (r === 'direct') {
-      const key = ClaudeDirect.getKey();
-      if (kind === 'draft') return ClaudeDirect.draft(key, payload.form, payload.memo);
-      if (kind === 'chat') return ClaudeDirect.chat(key, payload.form, payload.memo, payload.messages);
-      return ClaudeDirect.readPlan(key, payload);
-    }
     if (r === 'trial') {
       if (kind === 'plan' && (payload.files || []).length > 10) {
-        throw new Error('무료체험에서는 월안 파일을 10개까지 올릴 수 있어요. 나눠서 올리거나 내 API 키를 써 주세요.');
+        throw new Error('월안 파일은 한 번에 10개까지 올릴 수 있어요. 나눠서 올려 주세요.');
       }
       let res;
       let data = null;
@@ -733,15 +873,10 @@
       }
       try { data = await res.json(); } catch (e) { /* 아래에서 처리 */ }
       if (data && typeof data.remaining === 'number' && ai.trial) ai.trial.remaining = Math.max(0, data.remaining);
-      if (res.status === 404 && kind === 'chat') {
-        openKeyBox();
-        throw new Error('부탁하기는 무료체험에서 곧 쓸 수 있어요. 지금은 내 API 키를 넣으면 바로 쓸 수 있어요.');
-      }
       if (!res.ok || !data || data.ok === false) {
         if (data && (data.code === 'IP_LIMIT' || data.code === 'DAILY_CAP')) {
           if (ai.trial) ai.trial.remaining = 0;
           if (data.code === 'DAILY_CAP' && ai.remote) ai.remote.capped = true;
-          openKeyBox();
         }
         renderUsage();
         throw new Error((data && data.error) || (kind === 'draft' ? '채우지 못했어요. 잠시 뒤 다시 눌러 주세요.' : '월안을 읽지 못했어요. 잠시 뒤 다시 해 주세요.'));
@@ -749,10 +884,7 @@
       renderUsage();
       return data;
     }
-    if (r !== 'server') {
-      openKeyBox();
-      throw new Error('API 키를 넣으면 바로 쓸 수 있어요.');
-    }
+    if (r !== 'server') throw new Error('지금은 자동으로 채우기에 연결하지 못했어요. 새로고침한 뒤 다시 해 주세요.');
     if (ai.needsCode && !/^\d{6}$/.test($('aiCode').value.trim())) {
       $('aiCode').focus();
       throw new Error('연결 번호 6자리를 넣어 주세요.');
@@ -764,37 +896,11 @@
     try { data = await res.json(); } catch (e) { /* 아래에서 처리 */ }
     if (data && data.trial) { ai.trial = data.trial; renderUsage(); }
     if (!res.ok || !data) {
-      if (data && data.code === 'trial_used_up') openKeyBox();
       throw new Error((data && data.error) || (kind === 'draft' ? '채우지 못했어요. 잠시 뒤 다시 눌러 주세요.' : '월안을 읽지 못했어요. 잠시 뒤 다시 해 주세요.'));
     }
     return data;
   }
 
-  $('keySave').addEventListener('click', () => {
-    const v = $('apiKey').value.trim();
-    if (!ClaudeDirect.looksLikeKey(v)) { toast('API 키는 sk-ant-로 시작해요. 다시 확인해 주세요.', true); return; }
-    if (!ClaudeDirect.setKey(v)) { toast('이 브라우저에서는 키를 저장할 수 없어요.', true); return; }
-    $('apiKey').value = '';
-    $('keyBox').open = false;
-    setPref('key');
-    toast('키를 저장했어요. 이제 횟수 제한 없이 쓸 수 있어요.');
-    renderUsage();
-    ClaudeDirect.loadSdk().catch(() => {});
-  });
-  $('apiKey').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('keySave').click(); } });
-  function chooseMode(mode) {
-    setPref(mode);
-    if (mode === 'key' && !ClaudeDirect.getKey()) { openKeyBox(); $('apiKey').focus(); }
-    renderUsage();
-  }
-  $('modeShared').addEventListener('click', () => chooseMode('shared'));
-  $('modeKey').addEventListener('click', () => chooseMode('key'));
-  $('keyClear').addEventListener('click', () => {
-    setPref('shared');
-    ClaudeDirect.clearKey();
-    toast('저장한 키를 지웠어요.');
-    renderUsage();
-  });
 
   async function loadAiStatus() {
     if (inArtifact) {
@@ -899,7 +1005,7 @@
 
       const notes = (data.notes || []).map((n) => masker.unmask(n));
       $('aiSummary').textContent = applied
-        ? applied + '곳을 채웠어요. 노란 점선 칸을 읽어 보고, 고칠 곳은 칸을 눌러 고쳐 주세요.'
+        ? applied + '곳을 채웠어요. 노란 점선 칸을 읽어 보고, 고칠 곳은 칸을 눌러 바로 고치거나 말로 부탁해 주세요.'
         : '채울 곳을 찾지 못했어요. 메모를 조금 더 자세히 적어 주세요.';
       const list = $('aiNotes');
       list.textContent = '';
@@ -975,12 +1081,16 @@
     return b;
   }
   function insertActivity(text, day) {
-    const input = day ? document.querySelector('.day[data-day="' + day + '"] .act') : (lastDayInput || document.querySelector('.day .act'));
+    const input = day ? document.querySelector('.day[data-day="' + day + '"] .act')
+      : document.querySelector('.day:not([hidden]) .act') || document.querySelector('.day .act');
     if (!input) return;
     const v = input.value.trim();
     input.value = v ? v + ', ' + text : text;
+    const row = input.closest('.day');
+    if (row && row.hidden) showDay(row.dataset.day);
     input.focus();
     lastDayInput = input;
+    updateDayDots();
   }
 
   /* 평가 아이: 요일마다 겹치지 않게, 이전 주에 덜 나온 아이부터 */
@@ -1054,11 +1164,20 @@
       act.setAttribute('aria-label', day + '요일 활동');
       act.value = (prev[day] || {}).act || '';
       act.addEventListener('focus', () => { lastDayInput = act; });
+      act.addEventListener('input', updateDayDots);
+      // Enter: 활동 → 아이 모습 → 다음 요일 활동 (한글 조합 중 Enter는 무시)
+      act.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); kid.focus(); } });
       const kid = el('input', 'kid');
       kid.type = 'text';
       kid.placeholder = hasNames ? '평가 아이 모습 (선택) 예: 나사를 끝까지 돌려 뚜껑을 닫음' : '아이 모습 (선택) 예: 민서 - 나사를 끝까지 돌림';
       kid.setAttribute('aria-label', day + '요일 아이 모습');
       kid.value = (prev[day] || {}).kid || '';
+      kid.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+        e.preventDefault();
+        const next = DAYS[i + 1];
+        if (next) { showDay(next); const a = document.querySelector('.day[data-day="' + next + '"] .act'); if (a) a.focus(); }
+      });
       row.append(head, act);
       const items = info ? (info.items || []).filter((it) => it.activity && it.activity.trim() && it.activity.trim() !== '*') : [];
       if (items.length || hasNames) {
@@ -1079,7 +1198,64 @@
       row.appendChild(kid);
       box.appendChild(row);
     });
+    // 요일 탭: 한 번에 한 요일만 펼쳐서 스크롤을 줄인다.
+    box.classList.add('tabbed');
+    const tabs = el('div', 'day-tabs');
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', '요일 고르기');
+    DAYS.forEach((day) => {
+      const info = w && (w.days || []).find((x) => x.day === day);
+      const t = el('button', 'day-tab');
+      t.type = 'button';
+      t.setAttribute('role', 'tab');
+      t.dataset.day = day;
+      const who = hasNames ? (assign[day] || '') : '';
+      t.append(el('i', 'dot'), el('b', null, day), el('small', null, who || (info && info.date) || ''));
+      t.title = day + '요일' + (info && info.date ? ' (' + info.date + ')' : '') + (who ? ' · 평가 아이 ' + who : '');
+      t.addEventListener('click', () => showDay(day));
+      tabs.appendChild(t);
+    });
+    box.prepend(tabs);
+    const nav = el('div', 'day-nav');
+    const prevBtn = el('button', 'day-prev', '‹ 앞 요일');
+    const nextBtn = el('button', 'day-next', '다음 요일 ›');
+    prevBtn.type = nextBtn.type = 'button';
+    prevBtn.addEventListener('click', () => showDay(DAYS[DAYS.indexOf(activeDay) - 1]));
+    nextBtn.addEventListener('click', () => showDay(DAYS[DAYS.indexOf(activeDay) + 1]));
+    nav.append(prevBtn, el('span', null, 'Enter를 누르면 다음 칸으로 가요'), nextBtn);
+    box.appendChild(nav);
+    showDay(DAYS.includes(activeDay) ? activeDay : DAYS[0], true);
     renderKidList(classNames()); // 메모장 이름표의 요일 표시도 맞춘다
+  }
+  function showDay(day, quiet) {
+    if (!day) return;
+    const box = $('days');
+    const from = DAYS.indexOf(activeDay);
+    const to = DAYS.indexOf(day);
+    activeDay = day;
+    box.querySelectorAll('.day').forEach((r) => {
+      const on = r.dataset.day === day;
+      if (on && r.hidden && !quiet) {
+        r.style.setProperty('--day-from', (to < from ? -14 : 14) + 'px');
+        r.style.animation = 'none'; void r.offsetWidth; r.style.animation = '';
+      }
+      r.hidden = !on;
+    });
+    box.querySelectorAll('.day-tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.day === day)));
+    const p = box.querySelector('.day-prev'), n = box.querySelector('.day-next');
+    if (p) p.disabled = to <= 0;
+    if (n) n.disabled = to >= DAYS.length - 1;
+    updateDayDots();
+  }
+  function updateDayDots() {
+    let n = 0;
+    document.querySelectorAll('#days .day').forEach((r) => {
+      const done = !!r.querySelector('.act').value.trim();
+      if (done) n++;
+      const t = document.querySelector('#days .day-tab[data-day="' + r.dataset.day + '"]');
+      if (t) t.classList.toggle('done', done);
+    });
+    if (folds.memo) folds.memo.badge(n ? n + '/' + DAYS.length + '일 적음' : '', n === DAYS.length ? 'mint' : '');
   }
 
   function renderPlan() {
@@ -1223,7 +1399,7 @@
   async function loadPlan(fileList) {
     const files = Array.from(fileList || []);
     if (!files.length || plan.busy) return;
-    if (!route()) { openKeyBox(); toast(inArtifact ? '이 화면에서는 월안을 읽을 수 없어요. 일지 도우미 주소로 들어와 주세요.' : 'API 키를 넣으면 월안도 읽을 수 있어요.', true); return; }
+    if (!route()) { toast(inArtifact ? '이 화면에서는 월안을 읽을 수 없어요. 일지 도우미 주소로 들어와 주세요.' : '지금은 월안 읽기에 연결하지 못했어요. 새로고침한 뒤 다시 해 주세요.', true); return; }
     plan.busy = true;
     renderPlan();
     const t0 = Date.now();
@@ -1257,16 +1433,28 @@
   renderPlan();
 
   /* ---------- 오른쪽 탭 ---------- */
-  function showTab(which) {
-    const chat = which === 'chat';
-    $('paneFill').hidden = chat;
-    $('paneChat').hidden = !chat;
-    $('tabFill').setAttribute('aria-selected', String(!chat));
-    $('tabChat').setAttribute('aria-selected', String(chat));
-    if (chat) setTimeout(() => $('chatInput').focus(), 0);
+  /* ---------- 채팅창 열고 닫기 ---------- */
+  function setChatOpen(open) {
+    $('chatWin').hidden = !open;
+    $('chatFab').setAttribute('aria-expanded', String(open));
+    updateFab();
+    if (open) {
+      $('chatFab').classList.remove('fresh');
+      try { localStorage.setItem('kissay.chatSeen', '1'); } catch (e) { /* 무시 */ }
+      const log = $('chatLog'); log.scrollTop = log.scrollHeight;
+      setTimeout(() => $('chatInput').focus({ preventScroll: true }), 0);
+    }
   }
-  $('tabFill').addEventListener('click', () => showTab('fill'));
-  $('tabChat').addEventListener('click', () => showTab('chat'));
+  function updateFab() { $('chatFab').hidden = $('workspace').hidden || !$('chatWin').hidden; }
+  // 예전 이름 유지(시험용): showTab('chat') 이면 채팅창을 연다.
+  function showTab(which) { setChatOpen(which === 'chat'); }
+  try { if (localStorage.getItem('kissay.chatSeen')) $('chatFab').classList.remove('fresh'); } catch (e) { /* 무시 */ }
+  $('chatFab').addEventListener('click', () => setChatOpen(true));
+  $('aiToChat').addEventListener('click', () => setChatOpen(true));
+  $('chatClose').addEventListener('click', () => { setChatOpen(false); $('chatFab').focus(); });
+  $('chatWin').addEventListener('keydown', (e) => { if (e.key === 'Escape') { setChatOpen(false); $('chatFab').focus(); } });
+  new MutationObserver(updateFab).observe($('workspace'), { attributes: true, attributeFilter: ['hidden'] });
+  updateFab();
 
   /* ---------- 내 메모(나만 보는 메모, 이 브라우저에만) ---------- */
   const MEMO_KEY = 'kissay.teacherMemo';
@@ -1331,7 +1519,7 @@
     const text = input.value.trim();
     if (!text || chatState.busy) return;
     if (!state.doc) { bubble('bot err', '먼저 왼쪽 위 [다른 파일 열기]나 첫 화면에서 일지 파일을 열어 주세요.'); return; }
-    if (!route()) { openKeyBox(); bubble('bot err', '아래 "내 API 키로 쓰기"에 키를 넣으면 바로 부탁할 수 있어요.'); return; }
+    if (!route()) { bubble('bot err', '지금은 부탁하기에 연결하지 못했어요. 새로고침한 뒤 다시 해 주세요.'); return; }
     const names = NameMask.parseNames($('aiNames').value);
     if (!names.length && !chatState.ackNoNames) {
       chatState.ackNoNames = true;
