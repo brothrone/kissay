@@ -1246,15 +1246,42 @@
   try { gyogu = JSON.parse(localStorage.getItem(GYOGU_KEY) || '{}') || {}; } catch (e) { gyogu = {}; }
   function saveGyogu() { try { localStorage.setItem(GYOGU_KEY, JSON.stringify(gyogu)); } catch (e) { /* 무시 */ } }
   function gyoguList(w) { return ((w && w.free_play) || []).map((x) => String(x).trim()).filter((x) => x && x !== '*'); }
-  function gyoguOffset() {
-    const w = currentWeek();
-    const list = gyoguList(w).join('/');
-    let off = 0;
-    for (let i = plan.index - 1; i >= 0; i--) {
-      if (gyoguList(plan.weeks[i]).join('/') !== list) break;
-      off += DAYS.length;
+  // 교구 난이도(몬테소리 영역 기준): 일상 1 < 감각 2 < 언어·수·문화 3, 더 높은 단계 낱말이면 +0.5. 모르면 2.
+  const GY_LEVELS = [
+    [3.5, /부사|문장|동사|곱하기|나누기|큰\s*수|수\s*구성|십진|분수/],
+    [3, /글자|자음|모음|자모|단어|명사|형용사|읽기|쓰기|숫자|홀수|짝수|수와|양\s*연결|더하기|빼기|구슬|지도|만국기|국기|대륙|지구본/],
+    [2, /막대|분홍탑|갈색|원기둥|색판|촉각|소리|기하|입체|무게|온도|냄새|맛|감각/],
+    [1, /옷|입고|벗기|뚜껑|나사|옮기|붓기|따르기|젓가락|집게|단추|지퍼|닦기|씻기|자르기|접기|꿰기|분류|열고|닫기/],
+  ];
+  function gyLevel(name) { for (const [lv, re] of GY_LEVELS) if (re.test(name)) return lv; return 2; }
+  /* 같은 교구 목록을 쓰는 연속된 주(보통 두 주)를 한 묶음으로 보고, 묶음 전체 요일에 교구를 놓는다.
+     - 처음에는 쉬운 것부터 어려운 순서로 하나씩.
+     - 요일이 남으면 어려운 교구부터 한 번 더 쓰되, 같은 주에 같은 교구가 두 번 나오지 않게 한다. 쉬운 교구는 되도록 다시 쓰지 않는다. */
+  function gyoguPlanFor(index) {
+    const list = gyoguList(plan.weeks[index]);
+    if (!list.length) return [];
+    const same = (i) => i >= 0 && i < plan.weeks.length && gyoguList(plan.weeks[i]).join('/') === list.join('/');
+    let first = index; while (same(first - 1)) first--;
+    let last = index; while (same(last + 1)) last++;
+    const total = (last - first + 1) * DAYS.length;
+    const ranked = list.map((name, i) => ({ name, i, lv: gyLevel(name) }));
+    const easyFirst = ranked.slice().sort((x, y) => x.lv - y.lv || x.i - y.i).map((x) => x.name);
+    const hardFirst = ranked.slice().sort((x, y) => y.lv - x.lv || y.i - x.i).map((x) => x.name);
+    const seq = easyFirst.slice(0, total);
+    const uses = new Map(seq.map((n) => [n, 1]));
+    while (seq.length < total) {
+      const wk = Math.floor(seq.length / DAYS.length);
+      const inWeek = new Set(seq.slice(wk * DAYS.length));
+      const yesterday = seq[seq.length - 1];
+      const fewest = Math.min(...hardFirst.map((n) => uses.get(n) || 0));
+      const pick = hardFirst.find((n) => !inWeek.has(n) && (uses.get(n) || 0) === fewest)
+        || hardFirst.find((n) => !inWeek.has(n))
+        || hardFirst.find((n) => n !== yesterday) || hardFirst[0];
+      seq.push(pick);
+      uses.set(pick, (uses.get(pick) || 0) + 1);
     }
-    return off;
+    const start = (index - first) * DAYS.length;
+    return seq.slice(start, start + DAYS.length).map((name, d) => ({ name, again: seq.indexOf(name) < start + d }));
   }
   function ensureGyogu() {
     const w = currentWeek();
@@ -1262,15 +1289,23 @@
     const key = weekKey();
     if (!list.length) return {};
     const cur = gyogu[key] = gyogu[key] || {};
-    const off = gyoguOffset();
+    const auto = gyoguPlanFor(plan.index);
     let changed = false;
     DAYS.forEach((day, i) => {
       if (cur[day] === '' || (cur[day] && list.includes(cur[day]))) return;
-      cur[day] = list[(off + i) % list.length];
+      cur[day] = auto[i] ? auto[i].name : '';
       changed = true;
     });
     if (changed) saveGyogu();
     return cur;
+  }
+  // 다른 주에서 이미 쓴 교구인지(화면 표시용)
+  function gyoguAgain(day) {
+    const g = (gyogu[weekKey()] || {})[day];
+    if (!g) return false;
+    const auto = gyoguPlanFor(plan.index);
+    const i = DAYS.indexOf(day);
+    return !!(auto[i] && auto[i].name === g && auto[i].again);
   }
   function cycleGyogu(day) {
     const list = gyoguList(currentWeek());
@@ -1332,7 +1367,9 @@
           gp.type = 'button';
           gp.title = '월안의 몬테소리 교구예요. 눌러서 다른 교구로 바꾸기';
           gp.setAttribute('aria-label', day + '요일 자유놀이 교구: ' + (g || '넣지 않음') + '. 눌러서 바꾸기');
-          gp.append(document.createTextNode('자유놀이'), el('b', null, g || '넣지 않음'), document.createTextNode('↻'));
+          gp.append(document.createTextNode('자유놀이'), el('b', null, g || '넣지 않음'));
+          if (g && gyoguAgain(day)) { gp.appendChild(el('small', 'again', '두 번째')); gp.title = '앞 주에 쓴 교구를 한 번 더 써요(어려운 교구부터). 눌러서 다른 교구로 바꾸기'; }
+          gp.appendChild(document.createTextNode('↻'));
           gp.addEventListener('click', () => cycleGyogu(day));
           cr.appendChild(gp);
         }
