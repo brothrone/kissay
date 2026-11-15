@@ -1318,6 +1318,13 @@
     return h ? h.origLines.join(' ').trim() : '';
   }
 
+  // 무료체험 서버는 12개까지 받으므로 최근 대화만, 사용자 말로 시작하게 보낸다.
+  function recentTurns(history) {
+    const out = history.slice(-12);
+    while (out.length && out[0].role !== 'user') out.shift();
+    return out;
+  }
+
   async function sendChat() {
     const input = $('chatInput');
     const text = input.value.trim();
@@ -1350,7 +1357,7 @@
     const payload = {
       form: buildForm(masker),
       memo: masker.mask(memo),
-      messages: chatState.history.map((m) => ({ role: m.role, content: masker.mask(m.content) })),
+      messages: recentTurns(chatState.history).map((m) => ({ role: m.role, content: masker.mask(m.content) })),
     };
     try {
       const data = await callAuto('chat', payload);
