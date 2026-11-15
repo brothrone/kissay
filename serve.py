@@ -194,6 +194,8 @@ def make_handler(cfg):
             u = urlparse(self.path)
             if u.path == "/api/draft":
                 return self._api(MAX_BODY, lambda b: ai_writer.draft(b.get("form"), b.get("memo"), cfg["mode"]))
+            if u.path == "/api/chat":
+                return self._api(MAX_BODY, lambda b: ai_writer.chat(b.get("form"), b.get("memo"), b.get("messages"), cfg["mode"]))
             if u.path == "/api/plan":
                 return self._api(MAX_PLAN_BODY, lambda b: ai_writer.read_plan(b.get("files"), b.get("text"), cfg["mode"]))
             if u.path == "/__save" and cfg["sample"] and self._local():

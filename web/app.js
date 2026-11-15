@@ -384,9 +384,15 @@
 
   /* ---------- 파일 열기 ---------- */
   async function openArrayBuffer(buf, fileName) {
-    const bytes = new Uint8Array(buf);
-    if (bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) {
-      throw new Error('예전 한글 파일(.hwp)이에요. 한글에서 "다른 이름으로 저장"을 눌러 파일 형식을 HWPX로 바꾼 뒤 열어 주세요.');
+    let bytes = new Uint8Array(buf);
+    let converted = null;
+    if (HwpConvert.isOldHwp(bytes)) {
+      // 예전 한글 파일(.hwp)은 브라우저 안에서 HWPX로 바꾼 뒤 연다(파일은 어디로도 보내지 않음).
+      toast('예전 한글 파일(.hwp)이라 hwpx로 바꾸고 있어요… 처음 한 번은 조금 걸려요.');
+      converted = await HwpConvert.toHwpx(buf, fileName);
+      buf = converted.bytes;
+      bytes = new Uint8Array(buf);
+      fileName = fileName.replace(/\.hwp$/i, '') + '.hwpx';
     }
     if (!(bytes[0] === 0x50 && bytes[1] === 0x4b)) throw new Error('한글 파일(.hwpx)이 아니에요. 한글에서 저장한 .hwpx 파일을 열어 주세요.');
     const zip = await JSZip.loadAsync(buf);
@@ -425,13 +431,20 @@
     $('report').hidden = true;
     clearAiMarks();
     renderDocument();
+    return { converted };
   }
 
   async function openFile(file) {
     if (!file) return;
     try {
-      await openArrayBuffer(await file.arrayBuffer(), file.name);
-      toast('일지를 열었어요. 오른쪽에 이번 주 메모를 적어 주세요.');
+      const { converted } = await openArrayBuffer(await file.arrayBuffer(), file.name);
+      if (converted) {
+        const lossNote = converted.loss.length ? ' 바꾸면서 모양이 조금 달라질 수 있는 곳이 ' + converted.loss.length + '군데 있어요. 저장한 뒤 한글에서 한 번 확인해 주세요.' : '';
+        const lockNote = converted.unlocked ? ' 저장한 파일에는 암호가 걸리지 않아요.' : '';
+        toast('예전 한글 파일을 hwpx로 바꿔서 열었어요. 저장하면 hwpx 파일로 저장돼요.' + lossNote + lockNote);
+      } else {
+        toast('일지를 열었어요. 오른쪽에 이번 주 메모를 적어 주세요.');
+      }
     } catch (err) {
       console.error(err);
       toast(err.message || String(err), true);
@@ -535,10 +548,54 @@
   const ai = { mode: 'off', reason: '', needsCode: false, trial: null, remote: null, ackNoNames: false, snapshot: null, aiUnits: new Set(), busy: false };
   const NAMES_KEY = 'kissay.childNames';
   function refreshNamesCount() {
-    const k = NameMask.parseNames($('aiNames').value).length;
+    const names = NameMask.parseNames($('aiNames').value);
     const c = $('namesCount');
-    c.textContent = k ? k + '명' : '이름 없음';
-    c.classList.toggle('empty', !k);
+    c.textContent = names.length ? names.length + '명' : '이름 없음';
+    c.classList.toggle('empty', !names.length);
+    renderKidList(names);
+  }
+  // 메모장 이름표: 이번 주 평가 아이면 요일을 붙인다. 누르면 지금 쓰는 칸에 이름이 들어간다.
+  function renderKidList(names) {
+    const list = $('kidList');
+    if (!list) return;
+    list.textContent = '';
+    $('kidEmpty').hidden = names.length > 0;
+    let dayOf = {};
+    try {
+      const cur = (typeof featured !== 'undefined' && featured[weekKey()]) || {};
+      for (const d of Object.keys(cur)) if (cur[d]) dayOf[cur[d]] = (dayOf[cur[d]] || '') + d;
+    } catch (e) { dayOf = {}; }
+    for (const n of names) {
+      const li = el('li');
+      const b = el('button', null, n);
+      b.type = 'button';
+      b.title = '눌러서 지금 쓰는 칸에 넣기';
+      if (dayOf[n]) b.appendChild(el('i', null, dayOf[n]));
+      b.addEventListener('mousedown', (e) => e.preventDefault()); // 쓰던 칸의 커서를 잃지 않게
+      b.addEventListener('click', () => insertName(n));
+      li.appendChild(b);
+      list.appendChild(li);
+    }
+  }
+  const NAME_TARGETS = '.day input, #aiMemo, #chatInput, .cell-editor';
+  let lastTextField = null;
+  document.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (t && t.matches && t.matches(NAME_TARGETS)) lastTextField = t;
+  });
+  function insertName(name) {
+    const active = document.activeElement;
+    let t = active && active.matches && active.matches(NAME_TARGETS) ? active
+      : (lastTextField && document.body.contains(lastTextField) ? lastTextField : null);
+    if (!t) t = !$('paneChat').hidden ? $('chatInput') : document.querySelector('.day .kid');
+    if (!t) return;
+    const start = t.selectionStart != null ? t.selectionStart : t.value.length;
+    const end = t.selectionEnd != null ? t.selectionEnd : t.value.length;
+    t.value = t.value.slice(0, start) + name + t.value.slice(end);
+    t.focus();
+    const pos = start + name.length;
+    try { t.setSelectionRange(pos, pos); } catch (e) { /* 일부 입력칸은 지원 안 함 */ }
+    t.dispatchEvent(new Event('input', { bubbles: true }));
   }
   try { $('aiNames').value = localStorage.getItem(NAMES_KEY) || ''; } catch (e) { /* 저장소를 못 쓰는 브라우저 */ }
   if (!$('aiNames').value.trim()) $('namesBox').open = true;
@@ -641,6 +698,9 @@
     }
     $('aiReason').textContent = msg;
     $('aiReason').hidden = !msg;
+    $('chatPrivacy').textContent = r === 'direct'
+      ? '부탁과 일지 글은 내 API 키로 Claude(Anthropic)에 바로 전달돼요. 아이 이름은 가려서 보내요.'
+      : '부탁과 일지 글은 아이 이름을 가려서 전달돼요. 서버에는 남지 않아요.';
     $('privacy').textContent = r === 'direct'
       ? '채우기를 누르면 메모와 일지 글이 내 API 키로 Claude(Anthropic)에 바로 전달돼요. 아이 이름은 가려서 보내요.'
       : r === 'trial'
@@ -655,7 +715,9 @@
     const r = route();
     if (r === 'direct') {
       const key = ClaudeDirect.getKey();
-      return kind === 'draft' ? ClaudeDirect.draft(key, payload.form, payload.memo) : ClaudeDirect.readPlan(key, payload);
+      if (kind === 'draft') return ClaudeDirect.draft(key, payload.form, payload.memo);
+      if (kind === 'chat') return ClaudeDirect.chat(key, payload.form, payload.memo, payload.messages);
+      return ClaudeDirect.readPlan(key, payload);
     }
     if (r === 'trial') {
       if (kind === 'plan' && (payload.files || []).length > 10) {
@@ -670,6 +732,10 @@
       }
       try { data = await res.json(); } catch (e) { /* 아래에서 처리 */ }
       if (data && typeof data.remaining === 'number' && ai.trial) ai.trial.remaining = Math.max(0, data.remaining);
+      if (res.status === 404 && kind === 'chat') {
+        openKeyBox();
+        throw new Error('부탁하기는 무료체험에서 곧 쓸 수 있어요. 지금은 내 API 키를 넣으면 바로 쓸 수 있어요.');
+      }
       if (!res.ok || !data || data.ok === false) {
         if (data && (data.code === 'IP_LIMIT' || data.code === 'DAILY_CAP')) {
           if (ai.trial) ai.trial.remaining = 0;
@@ -963,6 +1029,7 @@
     cur[day] = options[(i + 1) % options.length];
     saveFeatured();
     renderDays();
+    refreshNamesCount();
   }
 
   function renderDays() {
@@ -1011,6 +1078,7 @@
       row.appendChild(kid);
       box.appendChild(row);
     });
+    renderKidList(classNames()); // 메모장 이름표의 요일 표시도 맞춘다
   }
 
   function renderPlan() {
@@ -1140,11 +1208,13 @@
     for (const f of files) {
       const head = new Uint8Array(await f.slice(0, 4).arrayBuffer());
       const name = f.name.toLowerCase();
-      if (head[0] === 0xd0 && head[1] === 0xcf) throw new Error('예전 한글 파일(.hwp)이에요. 한글에서 PDF나 HWPX로 저장해서 올려 주세요.');
-      if (name.endsWith('.hwpx') || (head[0] === 0x50 && head[1] === 0x4b)) payload.text += (payload.text ? '\n\n' : '') + await hwpxToText(await f.arrayBuffer());
+      if (HwpConvert.isOldHwp(head)) {
+        const conv = await HwpConvert.toHwpx(await f.arrayBuffer(), f.name);
+        payload.text += (payload.text ? '\n\n' : '') + await hwpxToText(conv.bytes);
+      } else if (name.endsWith('.hwpx') || (head[0] === 0x50 && head[1] === 0x4b)) payload.text += (payload.text ? '\n\n' : '') + await hwpxToText(await f.arrayBuffer());
       else if (name.endsWith('.pdf') || f.type === 'application/pdf') payload.files.push({ mediaType: 'application/pdf', data: await blobToBase64(f) });
       else if ((f.type || '').startsWith('image/') || /\.(jpe?g|png|webp|gif)$/i.test(name)) payload.files.push(await imageToJpeg(f));
-      else throw new Error('PDF, 사진, 한글(.hwpx) 파일만 올릴 수 있어요: ' + f.name);
+      else throw new Error('PDF, 사진, 한글(.hwp, .hwpx) 파일만 올릴 수 있어요: ' + f.name);
     }
     return payload;
   }
@@ -1185,9 +1255,183 @@
   if (plan.weeks.length) pickDefaultWeek();
   renderPlan();
 
+  /* ---------- 오른쪽 탭 ---------- */
+  function showTab(which) {
+    const chat = which === 'chat';
+    $('paneFill').hidden = chat;
+    $('paneChat').hidden = !chat;
+    $('tabFill').setAttribute('aria-selected', String(!chat));
+    $('tabChat').setAttribute('aria-selected', String(chat));
+    if (chat) setTimeout(() => $('chatInput').focus(), 0);
+  }
+  $('tabFill').addEventListener('click', () => showTab('fill'));
+  $('tabChat').addEventListener('click', () => showTab('chat'));
+
+  /* ---------- 내 메모(나만 보는 메모, 이 브라우저에만) ---------- */
+  const MEMO_KEY = 'kissay.teacherMemo';
+  try { $('teacherMemo').value = localStorage.getItem(MEMO_KEY) || ''; } catch (e) { /* 무시 */ }
+  $('teacherMemo').addEventListener('input', () => { try { localStorage.setItem(MEMO_KEY, $('teacherMemo').value); } catch (e) { /* 무시 */ } });
+  refreshNamesCount();
+
+  /* ---------- 부탁하기(대화) ---------- */
+  const chatState = { history: [], busy: false, ackNoNames: false };
+  const SUGGEST = [
+    '수요일 평가를 조금 더 자세히 써 줘',
+    '놀이지원을 짧게 줄여 줘',
+    '맞춤법이랑 띄어쓰기 봐 줘',
+    '금요일 평가 아이를 다른 아이로 바꿔 줘',
+    '이번 주 평가 문장이 서로 비슷하지 않게 다듬어 줘',
+  ];
+  function chatScroll() { const log = $('chatLog'); log.scrollTop = log.scrollHeight; }
+  function bubble(kind, text) {
+    const b = el('div', 'bubble ' + kind, text);
+    $('chatLog').appendChild(b);
+    chatScroll();
+    return b;
+  }
+  function chatHello() {
+    $('chatLog').textContent = '';
+    bubble('bot', '안녕하세요! 일지에서 고치고 싶은 걸 편하게 말해 주세요. 요일이나 칸 이름을 같이 알려 주시면 더 정확해요.');
+    const box = $('chatSuggest');
+    box.textContent = '';
+    SUGGEST.forEach((t) => {
+      const c = el('button', 'chip', t);
+      c.type = 'button';
+      c.addEventListener('click', () => { $('chatInput').value = t; sendChat(); });
+      box.appendChild(c);
+    });
+    box.hidden = false;
+  }
+  function cellLabel(u) {
+    const entry = state.unitEls.get(u.id);
+    const label = entry && entry.el.dataset.label;
+    const head = headerOf(u);
+    return [label, head].filter(Boolean).join(' · ') || '칸';
+  }
+  // 같은 열의 머리글(놀이 활동, 놀이지원 등)을 찾는다
+  function headerOf(u) {
+    if (u.kind !== 'cell') return '';
+    // 위쪽에서 같은 열·같은 폭으로 시작하는 짧은 칸만 머리글로 본다(예: 놀이 활동, 놀이지원)
+    const cand = allUnits().filter((x) => x.kind === 'cell' && x.table === u.table && x.row < u.row && x.col === u.col
+      && (x.colSpan || 1) === (u.colSpan || 1) && x.lines.join('').trim().length <= 16 && x.lines.join('').trim().length > 0);
+    const h = cand.sort((a, b) => b.row - a.row)[0];
+    return h ? h.origLines.join(' ').trim() : '';
+  }
+
+  async function sendChat() {
+    const input = $('chatInput');
+    const text = input.value.trim();
+    if (!text || chatState.busy) return;
+    if (!state.doc) { bubble('bot err', '먼저 왼쪽 위 [다른 파일 열기]나 첫 화면에서 일지 파일을 열어 주세요.'); return; }
+    if (!route()) { openKeyBox(); bubble('bot err', '아래 "내 API 키로 쓰기"에 키를 넣으면 바로 부탁할 수 있어요.'); return; }
+    const names = NameMask.parseNames($('aiNames').value);
+    if (!names.length && !chatState.ackNoNames) {
+      chatState.ackNoNames = true;
+      bubble('bot err', '왼쪽 메모장에 우리 반 아이 이름을 적어 두시면 이름을 가려서 보내요. 이름 없이 보내려면 한 번 더 보내기를 눌러 주세요.');
+      return;
+    }
+    if (state.editing) commitEdit();
+    input.value = '';
+    $('chatSuggest').hidden = true;
+    bubble('me', text);
+    chatState.history.push({ role: 'user', content: text });
+    const wait = el('div', 'bubble bot');
+    const dots = el('span', 'typing');
+    dots.append(el('i'), el('i'), el('i'));
+    wait.appendChild(dots);
+    $('chatLog').appendChild(wait);
+    chatScroll();
+    chatState.busy = true;
+    $('chatSend').disabled = true;
+
+    const memo = composeMemo();
+    const corpus = allUnits().map((u) => u.lines.join('\n')).join('\n') + '\n' + memo + '\n' + chatState.history.map((m) => m.content).join('\n');
+    const masker = NameMask.createMasker(names, corpus);
+    const payload = {
+      form: buildForm(masker),
+      memo: masker.mask(memo),
+      messages: chatState.history.map((m) => ({ role: m.role, content: masker.mask(m.content) })),
+    };
+    try {
+      const data = await callAuto('chat', payload);
+      wait.remove();
+      const reply = masker.unmask(String(data.reply || ''));
+      const units = unitById();
+      const snap = new Map();
+      const changed = [];
+      for (const c of data.cells || []) {
+        const u = units.get(c.id);
+        if (!u || !u.editable) continue;
+        snap.set(u.id, u.lines.slice());
+        u.lines = (c.lines || []).map((l) => E.cleanText(masker.unmask(l)));
+        if (!u.lines.length) u.lines = [''];
+        ai.aiUnits.add(u.id);
+        rerenderUnit(u);
+        changed.push(u);
+      }
+      if (changed.length) { updateSummary(); $('report').hidden = true; }
+      const b = bubble('bot', reply);
+      chatState.history.push({ role: 'assistant', content: reply });
+      if (changed.length) {
+        const ul = el('ul', 'edits');
+        for (const u of changed) {
+          const li = el('li');
+          const btn = el('button', null, cellLabel(u) + ' — ' + u.lines.join(' ').slice(0, 40));
+          btn.type = 'button';
+          btn.title = '눌러서 일지에서 보기';
+          btn.addEventListener('click', () => {
+            const entry = state.unitEls.get(u.id);
+            if (!entry) return;
+            entry.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            entry.el.classList.remove('flash'); void entry.el.offsetWidth; entry.el.classList.add('flash');
+          });
+          li.appendChild(btn);
+          ul.appendChild(li);
+        }
+        b.appendChild(ul);
+        const undo = el('button', 'link-btn undo', '이번에 고친 것 되돌리기');
+        undo.type = 'button';
+        undo.addEventListener('click', () => {
+          for (const [id, lines] of snap) {
+            const u = units.get(id);
+            if (!u) continue;
+            u.lines = lines.slice();
+            ai.aiUnits.delete(id); // 되돌린 칸은 '자동으로 채운 곳' 표시도 지운다
+            rerenderUnit(u);
+          }
+          updateSummary();
+          undo.remove();
+          bubble('bot', '방금 고친 ' + snap.size + '곳을 되돌렸어요.');
+          chatState.history.push({ role: 'assistant', content: '(선생님이 방금 고친 내용을 되돌렸어요.)' });
+        });
+        b.appendChild(undo);
+        chatScroll();
+      }
+    } catch (err) {
+      wait.remove();
+      chatState.history.pop(); // 실패한 부탁은 대화 기록에서 뺀다
+      bubble('bot err', err.message || String(err));
+    } finally {
+      chatState.busy = false;
+      $('chatSend').disabled = false;
+    }
+  }
+  $('chatSend').addEventListener('click', sendChat);
+  $('chatInput').addEventListener('keydown', (e) => {
+    // 한글을 조합하는 중의 Enter는 보내지 않는다
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); sendChat(); }
+  });
+  $('chatInput').addEventListener('input', () => {
+    const t = $('chatInput');
+    t.style.height = 'auto';
+    t.style.height = Math.min(140, t.scrollHeight) + 'px';
+  });
+  $('chatClear').addEventListener('click', () => { chatState.history = []; chatHello(); });
+  chatHello();
+
   /* ---------- 개발용: ?dev 패널, 로컬 서버의 샘플 자동 열기, 검증용 훅 ---------- */
   if (/[?&]dev\b/.test(location.search)) $('devTools').hidden = false;
-  window.__hwpxApp = { state, openArrayBuffer, exportBlob, startEdit, commitEdit, plan, composeMemo, renderPlan, readPlanFiles, route, featured: () => featured };
+  window.__hwpxApp = { state, openArrayBuffer, exportBlob, startEdit, commitEdit, plan, composeMemo, renderPlan, readPlanFiles, route, featured: () => featured, sendChat, showTab };
   if (!inArtifact && /[?&]sample\b/.test(location.search)) {
     fetch('/__sample.hwpx').then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('샘플 없음'))))
       .then((b) => openArrayBuffer(b, decodeURIComponent((location.search.match(/name=([^&]+)/) || [])[1] || 'sample.hwpx')))

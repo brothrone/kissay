@@ -50,7 +50,7 @@
     return e instanceof Error ? e : new Error('채우지 못했어요. 잠시 뒤 다시 눌러 주세요.');
   }
 
-  async function ask(key, part, content) {
+  async function ask(key, part, content, history) {
     const [Anthropic, P] = await Promise.all([loadSdk(), loadPrompts()]);
     const cfg = P[part];
     const model = P.model;
@@ -59,7 +59,7 @@
       model,
       max_tokens: cfg.max_tokens,
       system: cfg.system,
-      messages: [{ role: 'user', content }],
+      messages: (history || []).concat([{ role: 'user', content }]),
       output_config: { effort: 'medium', format: { type: 'json_schema', schema: cfg.schema } },
     };
     if (FALLBACK_MODELS.has(model)) {
@@ -82,10 +82,7 @@
   }
 
   /* ---------- 일지 채우기 (서버 ai_writer.draft 와 같은 규칙) ---------- */
-  async function draft(key, form, memo) {
-    const cells = (form && form.cells) || [];
-    const content = '<form>\n' + JSON.stringify({ cells }) + '\n</form>\n\n<memo>\n' + memo + '\n</memo>';
-    const { data, meta } = await ask(key, 'draft', content);
+  function cleanCells(data, cells) {
     const allowed = new Set(cells.filter((c) => c.editable).map((c) => c.id));
     const seen = new Set();
     const out = [];
@@ -96,8 +93,35 @@
       item.lines.forEach((l) => String(l).replace(/\r/g, '').split('\n').forEach((x) => flat.push(x)));
       out.push({ id: item.id, lines: flat.length ? flat : [''] });
     }
+    return out;
+  }
+  async function draft(key, form, memo) {
+    const cells = (form && form.cells) || [];
+    const content = '<form>\n' + JSON.stringify({ cells }) + '\n</form>\n\n<memo>\n' + memo + '\n</memo>';
+    const { data, meta } = await ask(key, 'draft', content);
     const notes = ((data && data.notes) || []).map(String).filter((n) => n.trim()).slice(0, 20);
-    return { cells: out, notes, meta };
+    return { cells: cleanCells(data, cells), notes, meta };
+  }
+
+  /* ---------- 부탁하기 (서버 ai_writer.chat 과 같은 규칙) ---------- */
+  async function chat(key, form, memo, messages) {
+    const items = (messages || []).slice(-12)
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim())
+      .map((m) => ({ role: m.role, content: String(m.content).slice(0, 2000).trim() }));
+    while (items.length && items[0].role !== 'user') items.shift();
+    const merged = [];
+    for (const m of items) {
+      if (merged.length && merged[merged.length - 1].role === m.role) merged[merged.length - 1].content += '\n' + m.content;
+      else merged.push(Object.assign({}, m));
+    }
+    if (!merged.length || merged[merged.length - 1].role !== 'user') throw new Error('부탁할 내용을 적어 주세요.');
+    const request = merged.pop().content;
+    const cells = (form && form.cells) || [];
+    const content = '<form>\n' + JSON.stringify({ cells }) + '\n</form>\n\n<memo>\n' + (memo || '(없음)') + '\n</memo>\n\n<request>\n' + request + '\n</request>';
+    const { data, meta } = await ask(key, 'chat', content, merged);
+    const out = cleanCells(data, cells);
+    const reply = String((data && data.reply) || '').trim();
+    return { reply: reply || (out.length ? '고쳤어요.' : '어떤 칸을 고칠지 한 번 더 알려 주세요.'), cells: out, meta };
   }
 
   /* ---------- 월안 정리 (서버 ai_writer.read_plan 과 같은 규칙) ---------- */
@@ -118,5 +142,5 @@
     return { weeks, notes, meta };
   }
 
-  global.ClaudeDirect = { looksLikeKey, getKey, setKey, clearKey, draft, readPlan, loadSdk };
+  global.ClaudeDirect = { looksLikeKey, getKey, setKey, clearKey, draft, chat, readPlan, loadSdk };
 })(window);

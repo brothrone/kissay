@@ -26,6 +26,10 @@ SYSTEM_PROMPT = PROMPTS["draft"]["system"]
 OUTPUT_SCHEMA = PROMPTS["draft"]["schema"]
 PLAN_SYSTEM_PROMPT = PROMPTS["plan"]["system"]
 PLAN_SCHEMA = PROMPTS["plan"]["schema"]
+CHAT_SYSTEM_PROMPT = PROMPTS["chat"]["system"]
+CHAT_SCHEMA = PROMPTS["chat"]["schema"]
+MAX_CHAT_TURNS = 12
+MAX_CHAT_CHARS = 2000
 
 
 class AIError(Exception):
@@ -85,7 +89,7 @@ def _clean_result(data: object, cells: list[dict]) -> dict:
     return {"cells": out_cells, "notes": notes}
 
 
-def _ask_claude(system: str, content, schema: dict, max_tokens: int = 16000) -> tuple[dict, dict]:
+def _ask_claude(system: str, content, schema: dict, max_tokens: int = 16000, history: list | None = None) -> tuple[dict, dict]:
     """Claude에 한 번 물어 JSON(스키마 고정)을 받는다. 교사에게 보여 줄 수 있는 AIError로만 실패한다."""
     try:
         import anthropic
@@ -98,7 +102,7 @@ def _ask_claude(system: str, content, schema: dict, max_tokens: int = 16000) -> 
         model=model,
         max_tokens=max_tokens,
         system=system,
-        messages=[{"role": "user", "content": content}],
+        messages=(history or []) + [{"role": "user", "content": content}],
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": schema}},
     )
     if os.environ.get("KISSAY_THINKING") == "off":  # 선택: 생각 끄기(Essay 무료체험과 같은 조건 시험용)
@@ -242,3 +246,58 @@ def read_plan(files: object, text: object, mode: str) -> dict:
     result = _clean_plan(data)
     result["meta"] = meta
     return result
+
+
+# ---------- 부탁하기(대화) ----------
+
+def _clean_history(messages: object) -> tuple[list[dict], str]:
+    """앞선 대화(글만)와 이번 부탁을 나눈다. 대화는 user로 시작해 user/assistant가 번갈아야 한다."""
+    if not isinstance(messages, list) or not messages:
+        raise AIError("부탁할 내용을 적어 주세요.", 400)
+    items = []
+    for m in messages[-MAX_CHAT_TURNS:]:
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+            continue
+        text = str(m.get("content", ""))[:MAX_CHAT_CHARS].strip()
+        if text:
+            items.append({"role": m["role"], "content": text})
+    while items and items[0]["role"] != "user":
+        items.pop(0)
+    merged: list[dict] = []
+    for m in items:  # 같은 역할이 이어지면 합친다
+        if merged and merged[-1]["role"] == m["role"]:
+            merged[-1]["content"] += "\n" + m["content"]
+        else:
+            merged.append(dict(m))
+    if not merged or merged[-1]["role"] != "user":
+        raise AIError("부탁할 내용을 적어 주세요.", 400)
+    request = merged.pop()["content"]
+    return merged, request
+
+
+def _mock_chat(cells: list[dict], request: str) -> dict:
+    target = next((c for c in cells if c["editable"] and len(" ".join(c["lines"])) >= 60), None)
+    if target and ("평가" in request or "자세히" in request or "줄여" in request):
+        return {"reply": "연습 모드라서 첫 평가 칸에 예시 문장만 넣었어요.",
+                "cells": [{"id": target["id"], "lines": ["[연습] " + request[:40]]}]}
+    return {"reply": "연습 모드라서 실제로 고치지는 않았어요. 부탁: " + request[:40], "cells": []}
+
+
+def chat(form: object, memo: object, messages: object, mode: str) -> dict:
+    memo_s = memo if isinstance(memo, str) else ""
+    cells, _ = _validate_request(form, memo_s or "-")
+    history, request = _clean_history(messages)
+    if len(memo_s) > MAX_MEMO_CHARS:
+        memo_s = memo_s[:MAX_MEMO_CHARS]
+    if mode == "mock":
+        data = _mock_chat(cells, request)
+        meta = {"model": "mock"}
+    elif mode == "api":
+        content = _user_message(cells, memo_s or "(없음)") + "\n\n<request>\n" + request + "\n</request>"
+        data, meta = _ask_claude(CHAT_SYSTEM_PROMPT, content, CHAT_SCHEMA, PROMPTS["chat"]["max_tokens"], history)
+    else:
+        raise AIError("자동으로 채우기 준비가 아직 안 됐어요. 일지 도우미를 설치한 분께 알려 주세요.", 503)
+    result = _clean_result(data, cells)
+    reply = str((data or {}).get("reply", "")).strip() if isinstance(data, dict) else ""
+    return {"reply": reply or ("고쳤어요." if result["cells"] else "어떤 칸을 고칠지 한 번 더 알려 주세요."),
+            "cells": result["cells"], "meta": meta}
