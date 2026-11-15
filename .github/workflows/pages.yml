@@ -1,5 +1,5 @@
 # web/ 폴더의 화면을 GitHub Pages로 배포한다.
-# Pages에는 서버가 없으므로 API 키를 쓰지 않는다. 자동으로 채우기는 로컬 서버(serve.py)에서만 동작한다.
+# Pages에는 서버가 없으므로 API 키를 쓰지 않는다. 자동으로 채우기는 무료체험 서버를 쓴다.
 name: Pages
 
 on:
@@ -33,6 +33,9 @@ jobs:
             cat web/index.html
             printf '%s' '</body></html>'
           } > _site/index.html
+          # 배포할 때마다 스크립트 주소에 버전을 붙여, 새 화면이 예전에 받아 둔 스크립트와 섞이지 않게 한다.
+          sed -i -E "s#<script src=\"([a-z0-9-]+\.js)\"#<script src=\"\1?v=${GITHUB_SHA::7}\"#g" _site/index.html
+          grep -c "?v=${GITHUB_SHA::7}" _site/index.html
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
