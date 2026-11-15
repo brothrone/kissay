@@ -27,7 +27,7 @@ jobs:
       - name: Build site
         run: |
           mkdir -p _site
-          cp web/*.js _site/
+          cp web/*.js web/*.json _site/
           {
             printf '%s' '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>'
             cat web/index.html

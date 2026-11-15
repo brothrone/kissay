@@ -87,10 +87,52 @@ class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
 
+class TrialCounter:
+    """무료체험: 접속한 곳(IP)마다 하루에 쓴 횟수를 센다. limit 0이면 제한 없음."""
+
+    def __init__(self, limit):
+        self.limit = limit
+        self.used = {}
+        self.lock = threading.Lock()
+
+    def _key(self, who):
+        return (who, time.strftime("%Y-%m-%d"))
+
+    def remaining(self, who):
+        if not self.limit:
+            return None
+        with self.lock:
+            return max(0, self.limit - self.used.get(self._key(who), 0))
+
+    def take(self, who):
+        """한 번 쓸 수 있으면 True. 실패하면 give_back으로 돌려준다."""
+        if not self.limit:
+            return True
+        with self.lock:
+            k = self._key(who)
+            if self.used.get(k, 0) >= self.limit:
+                return False
+            self.used[k] = self.used.get(k, 0) + 1
+            # 지난 날짜 기록은 정리한다
+            today = k[1]
+            for old in [x for x in self.used if x[1] != today]:
+                del self.used[old]
+            return True
+
+    def give_back(self, who):
+        if not self.limit:
+            return
+        with self.lock:
+            k = self._key(who)
+            if self.used.get(k, 0) > 0:
+                self.used[k] -= 1
+
+
 def make_handler(cfg):
     import ai_writer
 
     limiter = RateLimiter(RATE_PER_MINUTE, MAX_CONCURRENT)
+    trial = TrialCounter(cfg["trial"])
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map,
@@ -138,6 +180,8 @@ def make_handler(cfg):
                     "mode": cfg["mode"], "reason": cfg["reason"],
                     "model": "mock" if cfg["mode"] == "mock" else os.environ.get("KISSAY_MODEL", ai_writer.DEFAULT_MODEL),
                     "needsCode": bool(cfg["code"]) and not self._local(),
+                    "trial": ({"limit": cfg["trial"], "remaining": trial.remaining(self.client_address[0])}
+                              if cfg["trial"] and cfg["mode"] != "off" else None),
                 })
             if path == "/__sample.hwpx":
                 if not (cfg["sample"] and self._local()):
@@ -178,16 +222,28 @@ def make_handler(cfg):
                 return self._json(400, {"error": "채우지 못했어요. 새로고침한 뒤 다시 눌러 주세요."})
             if not limiter.allow():
                 return self._json(429, {"error": "조금 쉬었다가 1분 뒤에 다시 눌러 주세요."})
+            who = self.client_address[0]
+            if not trial.take(who):
+                return self._json(429, {"error": f"오늘 무료체험 {cfg['trial']}번을 다 썼어요. 내 API 키를 넣으면 계속 쓸 수 있어요.",
+                                        "code": "trial_used_up", "trial": {"limit": cfg["trial"], "remaining": 0}})
             if not limiter.slots.acquire(blocking=False):
+                trial.give_back(who)
                 return self._json(429, {"error": "다른 일지를 채우는 중이에요. 잠시 뒤 다시 눌러 주세요."})
+            ok = False
             try:
-                return self._json(200, run(body))
+                result = run(body)
+                ok = True
+                if cfg["trial"]:
+                    result["trial"] = {"limit": cfg["trial"], "remaining": trial.remaining(who)}
+                return self._json(200, result)
             except ai_writer.AIError as e:
                 return self._json(e.status, {"error": str(e)})
             except Exception as e:  # 예상하지 못한 오류: 내용은 서버 화면에만 남긴다
                 sys.stderr.write("자동 채우기 오류: %s\n" % type(e).__name__)
                 return self._json(500, {"error": "채우지 못했어요. 잠시 뒤 다시 눌러 주세요."})
             finally:
+                if not ok:
+                    trial.give_back(who)  # 실패한 요청은 횟수에서 빼지 않는다
                 limiter.slots.release()
 
     return Handler
@@ -216,12 +272,14 @@ def main():
     ap.add_argument("--lan", action="store_true", help="같은 네트워크의 다른 기기에서 접속 허용")
     ap.add_argument("--mock-ai", action="store_true", help="API 키 없이 연습 모드(예시 응답)로 켜기")
     ap.add_argument("--dev", metavar="SAMPLE", help="개발용 샘플 hwpx 경로")
+    ap.add_argument("--trial", type=int, default=0, metavar="N",
+                    help="무료체험: 접속한 곳마다 하루 N번까지 서버 키로 쓰게 함 (0이면 제한 없음)")
     a = ap.parse_args()
 
     load_env(os.path.join(BASE, ".env"))
     sys.path.insert(0, BASE)
     mode, reason = ai_mode(a.mock_ai)
-    cfg = {"mode": mode, "reason": reason, "sample": a.dev,
+    cfg = {"mode": mode, "reason": reason, "sample": a.dev, "trial": max(0, a.trial),
            "code": f"{secrets.randbelow(10**6):06d}" if a.lan else ""}
 
     host = "0.0.0.0" if a.lan else "127.0.0.1"
@@ -242,6 +300,8 @@ def main():
     a.port = port
     print(f"HWPX 일지 편집기: http://127.0.0.1:{a.port}")
     print({"api": "자동 채우기: 켜짐 (Claude API)", "mock": "자동 채우기: 연습 모드", "off": "자동 채우기: 꺼짐 - " + reason}[mode])
+    if cfg["trial"] and mode != "off":
+        print(f"무료체험: 접속한 곳마다 하루 {cfg['trial']}번 (그 뒤에는 각자 API 키를 넣어 사용)")
     if a.lan:
         ip = lan_ip()
         if ip:

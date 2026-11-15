@@ -532,12 +532,12 @@
   $('saveBtn2').addEventListener('click', doSave);
 
   /* ---------- 이번 주 일지 자동으로 채우기 ---------- */
-  const ai = { mode: 'off', needsCode: false, ackNoNames: false, snapshot: null, aiUnits: new Set(), busy: false };
+  const ai = { mode: 'off', reason: '', needsCode: false, trial: null, remote: null, ackNoNames: false, snapshot: null, aiUnits: new Set(), busy: false };
   const NAMES_KEY = 'kissay.childNames';
   function refreshNamesCount() {
     const k = NameMask.parseNames($('aiNames').value).length;
     const c = $('namesCount');
-    c.textContent = k ? k + '명 가림' : '이름 없음';
+    c.textContent = k ? k + '명' : '이름 없음';
     c.classList.toggle('empty', !k);
   }
   try { $('aiNames').value = localStorage.getItem(NAMES_KEY) || ''; } catch (e) { /* 저장소를 못 쓰는 브라우저 */ }
@@ -547,41 +547,209 @@
     ai.ackNoNames = false; $('aiWarn').hidden = true;
     refreshNamesCount();
     try { localStorage.setItem(NAMES_KEY, $('aiNames').value); } catch (e) { /* 무시 */ }
+    renderDays();
   });
 
   function setAiState(mode, reason) {
     ai.mode = mode;
+    ai.reason = reason || '';
     $('aiState').textContent = { api: '켜짐', mock: '연습 모드', off: '꺼짐' }[mode] || '꺼짐';
-    $('aiState').title = reason || '';
-    const friendly = mode === 'mock' ? '지금은 연습 모드예요. 글을 새로 쓰지 않고 예시만 넣어요.'
-      : mode === 'off' ? reason : '';
-    $('aiReason').textContent = friendly || '';
-    $('aiReason').hidden = !friendly;
-    refreshAiButton();
+    $('aiState').title = ai.reason;
+    renderUsage();
+  }
+  /* 어디로 보낼지
+     - 'server': 이 화면을 띄운 일지 도우미 서버(serve.py, 서버 주인의 키)
+     - 'trial' : Essay 무료체험 서버(api.essay.win, 하루 횟수 제한)
+     - 'direct': 내 API 키로 브라우저에서 바로
+     선생님이 고른 쪽(무료체험/내 API 키)을 따르고, 고를 수 없으면 가능한 쪽으로 간다. */
+  const TRIAL_API_DEFAULT = 'https://api.essay.win/v1/trial/journal';
+  // 개발용: 이 컴퓨터(localhost)에서 열었을 때만 ?trialApi= 로 다른 체험 서버를 시험할 수 있다.
+  const TRIAL_API = (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && new URLSearchParams(location.search).get('trialApi')) || TRIAL_API_DEFAULT;
+  const MODE_KEY = 'kissay.useMode';
+  function getPref() { try { return localStorage.getItem(MODE_KEY) || ''; } catch (e) { return ''; } }
+  function setPref(v) { try { localStorage.setItem(MODE_KEY, v); } catch (e) { /* 무시 */ } }
+  function sharedRoute() {
+    if (ai.mode === 'api' || ai.mode === 'mock') return 'server';
+    if (ai.remote && !inArtifact) return 'trial';
+    return null;
+  }
+  function route() {
+    const hasKey = !inArtifact && !!ClaudeDirect.getKey();
+    const shared = sharedRoute();
+    const pref = getPref() || (hasKey ? 'key' : 'shared');
+    if (pref === 'key' && hasKey) return 'direct';
+    if (shared) return shared;
+    return hasKey ? 'direct' : null;
+  }
+  async function loadRemoteTrial() {
+    ai.remote = null;
+    if (inArtifact) return;
+    try {
+      const r = await fetch(TRIAL_API + '/status', { cache: 'no-store' });
+      if (!r.ok) return;
+      const s = await r.json();
+      if (typeof s.limit !== 'number') return;
+      ai.remote = { limit: s.limit, capped: !!s.capped };
+      ai.trial = { limit: s.limit, remaining: s.capped ? 0 : Math.max(0, +s.remaining || 0) };
+    } catch (e) { /* 체험 서버가 없거나 이 주소를 허용하지 않음: 내 API 키만 쓴다 */ }
   }
   function refreshAiButton() {
-    $('aiRun').disabled = ai.busy || !state.doc || ai.mode === 'off';
+    $('aiRun').disabled = ai.busy || !state.doc || !route();
   }
+  function openKeyBox() {
+    if (inArtifact) return;
+    $('keyBox').hidden = false;
+    $('keyBox').open = true;
+  }
+  function renderUsage() {
+    const r = route();
+    const shared = sharedRoute();
+    const sw = $('modeSwitch');
+    sw.hidden = !shared || inArtifact;
+    if (!sw.hidden) {
+      $('modeShared').textContent = ai.trial ? '무료체험' : '일지 도우미';
+      $('modeShared').classList.toggle('on', r === shared);
+      $('modeKey').classList.toggle('on', r === 'direct');
+      $('modeShared').setAttribute('aria-pressed', String(r === shared));
+      $('modeKey').setAttribute('aria-pressed', String(r === 'direct'));
+    }
+    $('keyBox').hidden = inArtifact;
+    $('keyClear').hidden = !ClaudeDirect.getKey();
+    const u = $('usage');
+    u.textContent = '';
+    u.className = 'usage' + (r === 'direct' ? ' mine' : '');
+    if (r === 'direct') {
+      u.append(el('b', null, '내 API 키'), document.createTextNode('로 쓰고 있어요. 횟수 제한이 없어요.'));
+      u.hidden = false;
+    } else if ((r === 'server' || r === 'trial') && ai.trial) {
+      if (ai.trial.remaining > 0) {
+        u.append(document.createTextNode('오늘 무료체험 '), el('b', null, ai.trial.remaining + '/' + ai.trial.limit + '번'),
+          document.createTextNode(' 남았어요. 다 쓰면 내 API 키로 계속 쓸 수 있어요.'));
+      } else {
+        u.append(document.createTextNode('오늘 무료체험 '), el('b', null, ai.trial.limit + '번'),
+          document.createTextNode('을 다 썼어요. 내일 다시 쓰거나, 아래에 내 API 키를 넣으면 바로 이어서 쓸 수 있어요.'));
+      }
+      u.hidden = false;
+      if (!ai.trial.remaining) openKeyBox();
+    } else u.hidden = true;
+    let msg = '';
+    if (r === 'trial' && ai.remote && ai.remote.capped) msg = '오늘은 무료체험을 쓰는 분이 많아 마감됐어요. 내 API 키를 넣으면 바로 쓸 수 있어요.';
+    else if (r === 'server' && ai.mode === 'mock') msg = '지금은 연습 모드예요. 글을 새로 쓰지 않고 예시만 넣어요.';
+    else if (!r) {
+      msg = inArtifact ? ai.reason : '아래 "내 API 키로 쓰기"에 키를 넣으면 이 주소에서도 자동으로 채울 수 있어요. 칸을 직접 고치고 저장하는 건 그대로 할 수 있어요.';
+      if (!inArtifact) openKeyBox();
+    }
+    $('aiReason').textContent = msg;
+    $('aiReason').hidden = !msg;
+    $('privacy').textContent = r === 'direct'
+      ? '채우기를 누르면 메모와 일지 글이 내 API 키로 Claude(Anthropic)에 바로 전달돼요. 아이 이름은 가려서 보내요.'
+      : r === 'trial'
+        ? '채우기를 누르면 메모와 일지 글이 무료체험 서버(essay.win)를 거쳐 Claude로 전달돼요. 서버에는 남지 않고, 아이 이름은 가려서 보내요.'
+        : '채우기를 누르면 메모와 일지 글이 자동 작성 서비스로 전달돼요. 아이 이름은 가려서 보내요.';
+    $('aiCodeField').hidden = !(ai.needsCode && r === 'server');
+    refreshAiButton();
+  }
+
+  // 자동 채우기 호출(일지 채우기 'draft', 월안 정리 'plan')
+  async function callAuto(kind, payload) {
+    const r = route();
+    if (r === 'direct') {
+      const key = ClaudeDirect.getKey();
+      return kind === 'draft' ? ClaudeDirect.draft(key, payload.form, payload.memo) : ClaudeDirect.readPlan(key, payload);
+    }
+    if (r === 'trial') {
+      if (kind === 'plan' && (payload.files || []).length > 10) {
+        throw new Error('무료체험에서는 월안 파일을 10개까지 올릴 수 있어요. 나눠서 올리거나 내 API 키를 써 주세요.');
+      }
+      let res;
+      let data = null;
+      try {
+        res = await fetch(TRIAL_API + '/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      } catch (e) {
+        throw new Error('무료체험 서버에 연결하지 못했어요. 잠시 뒤 다시 해 주세요.');
+      }
+      try { data = await res.json(); } catch (e) { /* 아래에서 처리 */ }
+      if (data && typeof data.remaining === 'number' && ai.trial) ai.trial.remaining = Math.max(0, data.remaining);
+      if (!res.ok || !data || data.ok === false) {
+        if (data && (data.code === 'IP_LIMIT' || data.code === 'DAILY_CAP')) {
+          if (ai.trial) ai.trial.remaining = 0;
+          if (data.code === 'DAILY_CAP' && ai.remote) ai.remote.capped = true;
+          openKeyBox();
+        }
+        renderUsage();
+        throw new Error((data && data.error) || (kind === 'draft' ? '채우지 못했어요. 잠시 뒤 다시 눌러 주세요.' : '월안을 읽지 못했어요. 잠시 뒤 다시 해 주세요.'));
+      }
+      renderUsage();
+      return data;
+    }
+    if (r !== 'server') {
+      openKeyBox();
+      throw new Error('API 키를 넣으면 바로 쓸 수 있어요.');
+    }
+    if (ai.needsCode && !/^\d{6}$/.test($('aiCode').value.trim())) {
+      $('aiCode').focus();
+      throw new Error('연결 번호 6자리를 넣어 주세요.');
+    }
+    const headers = { 'Content-Type': 'application/json' };
+    if (ai.needsCode) headers['X-Access-Code'] = $('aiCode').value.trim();
+    const res = await fetch('/api/' + kind, { method: 'POST', headers, body: JSON.stringify(payload) });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* 아래에서 처리 */ }
+    if (data && data.trial) { ai.trial = data.trial; renderUsage(); }
+    if (!res.ok || !data) {
+      if (data && data.code === 'trial_used_up') openKeyBox();
+      throw new Error((data && data.error) || (kind === 'draft' ? '채우지 못했어요. 잠시 뒤 다시 눌러 주세요.' : '월안을 읽지 못했어요. 잠시 뒤 다시 해 주세요.'));
+    }
+    return data;
+  }
+
+  $('keySave').addEventListener('click', () => {
+    const v = $('apiKey').value.trim();
+    if (!ClaudeDirect.looksLikeKey(v)) { toast('API 키는 sk-ant-로 시작해요. 다시 확인해 주세요.', true); return; }
+    if (!ClaudeDirect.setKey(v)) { toast('이 브라우저에서는 키를 저장할 수 없어요.', true); return; }
+    $('apiKey').value = '';
+    $('keyBox').open = false;
+    setPref('key');
+    toast('키를 저장했어요. 이제 횟수 제한 없이 쓸 수 있어요.');
+    renderUsage();
+    ClaudeDirect.loadSdk().catch(() => {});
+  });
+  $('apiKey').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('keySave').click(); } });
+  function chooseMode(mode) {
+    setPref(mode);
+    if (mode === 'key' && !ClaudeDirect.getKey()) { openKeyBox(); $('apiKey').focus(); }
+    renderUsage();
+  }
+  $('modeShared').addEventListener('click', () => chooseMode('shared'));
+  $('modeKey').addEventListener('click', () => chooseMode('key'));
+  $('keyClear').addEventListener('click', () => {
+    setPref('shared');
+    ClaudeDirect.clearKey();
+    toast('저장한 키를 지웠어요.');
+    renderUsage();
+  });
 
   async function loadAiStatus() {
     if (inArtifact) {
-      setAiState('off', '이 화면에서는 자동으로 채우기를 쓸 수 없어요. 일지 도우미를 켠 컴퓨터의 주소로 들어와 주세요. 칸을 직접 고치고 저장하는 건 그대로 할 수 있어요.');
+      setAiState('off', '이 화면에서는 자동으로 채우기를 쓸 수 없어요. 일지 도우미 주소로 들어와 주세요. 칸을 직접 고치고 저장하는 건 그대로 할 수 있어요.');
       return;
     }
     try {
       const r = await fetch('/api/status', { cache: 'no-store' });
       if (r.status === 404) {
-        // 서버 없이 화면만 올린 곳(GitHub Pages 등)
-        setAiState('off', '이 주소에서는 자동으로 채우기를 쓸 수 없어요. 칸을 직접 고치고 한글 파일로 저장하는 건 그대로 할 수 있어요.');
+        // 서버 없이 화면만 올린 곳(GitHub Pages, essay.win 등): Essay 무료체험 서버를 확인한다
+        await loadRemoteTrial();
+        setAiState('off', '');
         return;
       }
       if (!r.ok) throw new Error();
       const s = await r.json();
       ai.needsCode = !!s.needsCode;
-      $('aiCodeField').hidden = !ai.needsCode;
+      ai.trial = s.trial || null;
       setAiState(s.mode, s.mode === 'off' ? '자동으로 채우기 준비가 아직 안 됐어요. 일지 도우미를 설치한 분께 알려 주세요. 칸을 직접 고치고 저장하는 건 그대로 할 수 있어요.' : s.reason);
     } catch (e) {
-      setAiState('off', '일지 도우미와 연결되지 않았어요. 잠시 뒤 새로고침해 주세요. 칸을 직접 고치고 저장하는 건 그대로 할 수 있어요.');
+      await loadRemoteTrial();
+      setAiState('off', '');
     }
   }
 
@@ -627,7 +795,6 @@
     if (state.editing) commitEdit();
     const memo = composeMemo();
     if (!memo) { toast('월안을 불러오거나 요일별 활동을 적어 주세요.', true); return; }
-    if (ai.needsCode && !/^\d{6}$/.test($('aiCode').value.trim())) { toast('연결 번호 6자리를 넣어 주세요.', true); $('aiCode').focus(); return; }
     const names = NameMask.parseNames($('aiNames').value);
     if (!names.length && !ai.ackNoNames) { ai.ackNoNames = true; $('aiWarn').hidden = false; $('namesBox').open = true; return; }
     $('aiWarn').hidden = true;
@@ -635,8 +802,6 @@
     const corpus = allUnits().map((u) => u.lines.join('\n')).join('\n') + '\n' + memo;
     const masker = NameMask.createMasker(names, corpus);
     const payload = { form: buildForm(masker), memo: masker.mask(memo) };
-    const headers = { 'Content-Type': 'application/json' };
-    if (ai.needsCode) headers['X-Access-Code'] = $('aiCode').value.trim();
 
     ai.busy = true; refreshAiButton();
     const btn = $('aiRun');
@@ -645,10 +810,7 @@
     btn.textContent = '일지를 채우고 있어요…';
     $('aiProgress').hidden = false;
     try {
-      const r = await fetch('/api/draft', { method: 'POST', headers, body: JSON.stringify(payload) });
-      let data = null;
-      try { data = await r.json(); } catch (e) { /* 아래에서 처리 */ }
-      if (!r.ok || !data) throw new Error((data && data.error) || '채우지 못했어요. 잠시 뒤 다시 눌러 주세요.');
+      const data = await callAuto('draft', payload);
 
       // 되돌릴 수 있게 현재 상태를 저장한 뒤 결과를 넣는다.
       const units = unitById();
@@ -754,12 +916,63 @@
     lastDayInput = input;
   }
 
+  /* 평가 아이: 요일마다 겹치지 않게, 이전 주에 덜 나온 아이부터 */
+  const FEATURED_KEY = 'kissay.featured'; // { 주 키: { 월: '민서', ... } }, '' = 반 전체
+  let featured = {};
+  try { featured = JSON.parse(localStorage.getItem(FEATURED_KEY) || '{}') || {}; } catch (e) { featured = {}; }
+  function saveFeatured() { try { localStorage.setItem(FEATURED_KEY, JSON.stringify(featured)); } catch (e) { /* 무시 */ } }
+  function weekKey() { const w = currentWeek(); return w ? w.label + '|' + (w.start || '') : 'manual'; }
+  function classNames() { return NameMask.parseNames($('aiNames').value); }
+  function usageCounts(exceptKey) {
+    const c = {};
+    for (const k of Object.keys(featured)) {
+      if (k === exceptKey) continue;
+      for (const n of Object.values(featured[k] || {})) if (n) c[n] = (c[n] || 0) + 1;
+    }
+    return c;
+  }
+  function byLeastUsed(names, counts) {
+    return names.slice().sort((a, b) => (counts[a] || 0) - (counts[b] || 0) || names.indexOf(a) - names.indexOf(b));
+  }
+  function ensureAssignment() {
+    const names = classNames();
+    const key = weekKey();
+    const cur = featured[key] = featured[key] || {};
+    if (!names.length) return cur;
+    const counts = usageCounts(key);
+    const used = new Set(DAYS.map((d) => cur[d]).filter((n) => n && names.includes(n)));
+    let changed = false;
+    for (const day of DAYS) {
+      if (cur[day] === '' || (cur[day] && names.includes(cur[day]))) continue;
+      const pick = byLeastUsed(names.filter((n) => !used.has(n)), counts)[0] || '';
+      cur[day] = pick;
+      if (pick) used.add(pick);
+      changed = true;
+    }
+    if (changed) saveFeatured();
+    return cur;
+  }
+  function cycleKid(day) {
+    const names = classNames();
+    if (!names.length) { $('namesBox').open = true; toast('우리 반 아이 이름을 먼저 적어 주세요.'); return; }
+    const key = weekKey();
+    const cur = featured[key] = featured[key] || {};
+    const others = new Set(DAYS.filter((d) => d !== day).map((d) => cur[d]).filter(Boolean));
+    const options = [...byLeastUsed(names.filter((n) => !others.has(n)), usageCounts(key)), ''];
+    const i = options.indexOf(cur[day] === undefined ? '' : cur[day]);
+    cur[day] = options[(i + 1) % options.length];
+    saveFeatured();
+    renderDays();
+  }
+
   function renderDays() {
     const box = $('days');
     const prev = {};
     box.querySelectorAll('.day').forEach((d) => { prev[d.dataset.day] = { act: d.querySelector('.act').value, kid: d.querySelector('.kid').value }; });
     box.textContent = '';
     const w = currentWeek();
+    const hasNames = classNames().length > 0;
+    const assign = hasNames ? ensureAssignment() : {};
     DAYS.forEach((day, i) => {
       const info = w && (w.days || []).find((x) => x.day === day);
       const row = el('div', 'day');
@@ -775,13 +988,23 @@
       act.addEventListener('focus', () => { lastDayInput = act; });
       const kid = el('input', 'kid');
       kid.type = 'text';
-      kid.placeholder = '아이 모습 (선택) 예: 민서 - 나사를 끝까지 돌림';
+      kid.placeholder = hasNames ? '평가 아이 모습 (선택) 예: 나사를 끝까지 돌려 뚜껑을 닫음' : '아이 모습 (선택) 예: 민서 - 나사를 끝까지 돌림';
       kid.setAttribute('aria-label', day + '요일 아이 모습');
       kid.value = (prev[day] || {}).kid || '';
       row.append(head, act);
       const items = info ? (info.items || []).filter((it) => it.activity && it.activity.trim() && it.activity.trim() !== '*') : [];
-      if (items.length) {
+      if (items.length || hasNames) {
         const cr = el('div', 'chip-row');
+        if (hasNames) {
+          const who = assign[day] || '';
+          const pick = el('button', 'kid-pick' + (who ? '' : ' none'));
+          pick.type = 'button';
+          pick.title = '눌러서 다른 아이로 바꾸기';
+          pick.setAttribute('aria-label', day + '요일 평가 아이: ' + (who || '반 전체') + '. 눌러서 바꾸기');
+          pick.append(document.createTextNode('평가 아이'), el('b', null, who || '반 전체'), document.createTextNode('↻'));
+          pick.addEventListener('click', () => cycleKid(day));
+          cr.appendChild(pick);
+        }
         items.slice(0, 4).forEach((it) => cr.appendChild(chip(it.category ? it.category + ': ' + it.activity : it.activity, 'day-chip', day)));
         row.appendChild(cr);
       }
@@ -841,14 +1064,16 @@
       parts.push(L.join('\n'));
     }
     const rows = Array.from(document.querySelectorAll('#days .day'));
-    const anyDay = rows.some((r) => r.querySelector('.act').value.trim() || r.querySelector('.kid').value.trim());
+    const anyDay = rows.some((r) => r.querySelector('.act').value.trim() || r.querySelector('.kid').value.trim()) || classNames().length > 0;
     if (w || anyDay) {
       const D = rows.map((r) => {
         const day = r.dataset.day;
         const info = w && (w.days || []).find((x) => x.day === day);
         const act = r.querySelector('.act').value.trim();
         const kid = r.querySelector('.kid').value.trim();
-        return day + (info && info.date ? '(' + info.date + ')' : '') + ': 활동: ' + (act || '(비워 둠)') + (kid ? ' / 아이 모습: ' + kid : '');
+        const who = classNames().length ? (featured[weekKey()] || {})[day] : '';
+        return day + (info && info.date ? '(' + info.date + ')' : '') + ': 활동: ' + (act || '(비워 둠)')
+          + (who ? ' / 평가 아이: ' + who : '') + (kid ? ' / 아이 모습: ' + kid : '');
       });
       parts.push('[요일별 활동]\n' + D.join('\n'));
     }
@@ -927,8 +1152,7 @@
   async function loadPlan(fileList) {
     const files = Array.from(fileList || []);
     if (!files.length || plan.busy) return;
-    if (inArtifact || ai.mode === 'off') { toast('이 주소에서는 월안을 읽을 수 없어요. 일지 도우미를 켠 컴퓨터 주소로 들어와 주세요.', true); return; }
-    if (ai.needsCode && !/^\d{6}$/.test($('aiCode').value.trim())) { toast('연결 번호 6자리를 먼저 넣어 주세요.', true); $('aiCode').focus(); return; }
+    if (!route()) { openKeyBox(); toast(inArtifact ? '이 화면에서는 월안을 읽을 수 없어요. 일지 도우미 주소로 들어와 주세요.' : 'API 키를 넣으면 월안도 읽을 수 있어요.', true); return; }
     plan.busy = true;
     renderPlan();
     const t0 = Date.now();
@@ -937,12 +1161,7 @@
     }, 500);
     try {
       const payload = await readPlanFiles(files);
-      const headers = { 'Content-Type': 'application/json' };
-      if (ai.needsCode) headers['X-Access-Code'] = $('aiCode').value.trim();
-      const r = await fetch('/api/plan', { method: 'POST', headers, body: JSON.stringify(payload) });
-      let data = null;
-      try { data = await r.json(); } catch (e) { /* 아래에서 처리 */ }
-      if (!r.ok || !data) throw new Error((data && data.error) || '월안을 읽지 못했어요. 잠시 뒤 다시 해 주세요.');
+      const data = await callAuto('plan', payload);
       plan.weeks = data.weeks || [];
       plan.notes = data.notes || [];
       pickDefaultWeek();
@@ -968,7 +1187,7 @@
 
   /* ---------- 개발용: ?dev 패널, 로컬 서버의 샘플 자동 열기, 검증용 훅 ---------- */
   if (/[?&]dev\b/.test(location.search)) $('devTools').hidden = false;
-  window.__hwpxApp = { state, openArrayBuffer, exportBlob, startEdit, commitEdit, plan, composeMemo, renderPlan, readPlanFiles };
+  window.__hwpxApp = { state, openArrayBuffer, exportBlob, startEdit, commitEdit, plan, composeMemo, renderPlan, readPlanFiles, route, featured: () => featured };
   if (!inArtifact && /[?&]sample\b/.test(location.search)) {
     fetch('/__sample.hwpx').then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('샘플 없음'))))
       .then((b) => openArrayBuffer(b, decodeURIComponent((location.search.match(/name=([^&]+)/) || [])[1] || 'sample.hwpx')))

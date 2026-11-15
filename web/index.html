@@ -245,6 +245,28 @@
   .names .count { margin-left: auto; font-size: 12.5px; color: var(--mint-ink); background: var(--mint); padding: 1px 9px; border-radius: 999px; }
   .names .count.empty { color: var(--butter-ink); background: var(--butter); }
   .names-body { display: grid; gap: 6px; padding: 0 0 12px; }
+  .names textarea { width: 100%; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); padding: 9px 12px; font-size: 14.5px; resize: vertical; }
+  .names textarea:focus { outline: 3px solid var(--primary-soft); border-color: var(--primary); }
+  .kid-pick {
+    justify-self: start; border: 0; border-radius: 999px; padding: 3px 10px 3px 8px; cursor: pointer;
+    background: var(--mint); color: var(--mint-ink); font-size: 12.5px; display: inline-flex; gap: 6px; align-items: center;
+  }
+  .kid-pick:hover { filter: brightness(0.97); }
+  .kid-pick b { font-family: var(--font-cute); font-weight: 400; font-size: 14px; }
+  .kid-pick.none { background: var(--bg); color: var(--muted); }
+  .mode-switch { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 999px; background: var(--bg); }
+  .mode-switch button { border: 0; border-radius: 999px; padding: 7px 10px; background: transparent; color: var(--muted); cursor: pointer; font-family: var(--font-cute); font-size: 15px; }
+  .mode-switch button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(52, 64, 78, 0.12); }
+  .usage { margin-top: 12px; padding: 8px 12px; border-radius: 12px; background: var(--bg); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .usage b { font-family: var(--font-cute); font-weight: 400; color: var(--primary); }
+  .usage.mine b { color: var(--mint-ink); }
+  .keybox { margin-top: 10px; border-radius: 14px; background: var(--sky); padding: 2px 14px; }
+  .keybox summary { cursor: pointer; padding: 10px 0; font-size: 14px; color: var(--sky-ink); font-family: var(--font-cute); }
+  .keybox-body { display: grid; gap: 8px; padding-bottom: 12px; }
+  .key-row { display: flex; gap: 8px; }
+  .key-row input { flex: 1; min-width: 0; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); padding: 8px 12px; font-size: 14px; }
+  .keybox small { color: var(--muted); font-size: 12px; line-height: 1.55; }
+  .keybox a { color: var(--sky-ink); }
   .names input, .field input {
     width: 100%; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface);
     padding: 9px 12px; font-size: 14.5px;
@@ -396,19 +418,19 @@
         </div>
         <input type="file" id="planInput" accept=".pdf,.hwpx,image/*" multiple hidden>
 
+        <details class="names" id="namesBox">
+          <summary>우리 반 아이 이름 <span class="count empty" id="namesCount">이름 없음</span></summary>
+          <div class="names-body">
+            <textarea id="aiNames" rows="3" autocomplete="off" aria-label="우리 반 아이 이름" placeholder="휴대폰 메모장의 이름을 그대로 붙여 넣으세요.&#10;예: 민서 하준 수아 이안 도윤"></textarea>
+            <small>요일마다 평가에 나올 아이를 겹치지 않게 정해 드려요. 밖으로 보낼 때는 이름을 다른 이름으로 가리고, 돌아오면 원래 이름으로 바꿔요. 이 브라우저에만 기억해요.</small>
+          </div>
+        </details>
+
         <div class="days" id="days"></div>
 
         <details class="more" id="moreBox">
           <summary>더 적을 말 (선택)</summary>
           <textarea class="memo memo-small" id="aiMemo" aria-label="더 적을 말" placeholder="예: 수요일은 휴원이에요. 목요일 특성화는 다문화 수업이에요."></textarea>
-        </details>
-
-        <details class="names" id="namesBox">
-          <summary>아이 이름 가리기 <span class="count empty" id="namesCount">이름 없음</span></summary>
-          <div class="names-body">
-            <input id="aiNames" type="text" autocomplete="off" aria-label="우리 반 아이 이름" placeholder="민서, 하준, 수아, 이안">
-            <small>여기 적은 이름은 다른 이름으로 가려서 보내고, 돌아오면 원래 이름으로 바꿔 드려요. 이 컴퓨터에만 기억해요.</small>
-          </div>
         </details>
 
         <label class="field" for="aiCode" id="aiCodeField" hidden>
@@ -424,7 +446,24 @@
           <button type="button" class="btn btn-primary btn-wide" id="aiRun" disabled>이번 주 일지 채우기</button>
           <div class="progress" id="aiProgress" hidden><i></i></div>
         </div>
-        <p class="privacy">채우기를 누르면 메모와 일지 글이 자동 작성 서비스로 전달돼요. 아이 이름은 가려서 보내요.</p>
+        <p class="privacy" id="privacy">채우기를 누르면 메모와 일지 글이 자동 작성 서비스로 전달돼요. 아이 이름은 가려서 보내요.</p>
+
+        <div class="mode-switch" id="modeSwitch" role="group" aria-label="무엇으로 채울지 고르기" hidden>
+          <button type="button" id="modeShared">무료체험</button>
+          <button type="button" id="modeKey">내 API 키</button>
+        </div>
+        <div class="usage" id="usage" hidden></div>
+        <details class="keybox" id="keyBox" hidden>
+          <summary>내 API 키로 쓰기</summary>
+          <div class="keybox-body">
+            <div class="key-row">
+              <input id="apiKey" type="password" autocomplete="off" spellcheck="false" aria-label="내 API 키" placeholder="sk-ant-로 시작하는 키">
+              <button type="button" class="btn btn-soft" id="keySave">저장</button>
+            </div>
+            <button type="button" class="link-btn" id="keyClear" hidden>저장한 키 지우기</button>
+            <small>키는 이 브라우저에만 저장되고, 채울 때 Claude(Anthropic)로만 바로 보내요. 일지 도우미 서버에는 보내지 않아요. 키는 <a href="https://platform.claude.com" target="_blank" rel="noopener">platform.claude.com</a>에서 만들 수 있어요. 여러 사람이 쓰는 컴퓨터에서는 다 쓰고 키를 지워 주세요.</small>
+          </div>
+        </details>
 
         <div class="result" id="aiResult" hidden>
           <p id="aiSummary"></p>
@@ -467,4 +506,5 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="hwpx-engine.js"></script>
 <script src="name-mask.js"></script>
+<script src="direct.js"></script>
 <script src="app.js"></script>

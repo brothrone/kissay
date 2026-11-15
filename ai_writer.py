@@ -10,7 +10,7 @@ import json
 import os
 import re
 
-DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_MODEL = "claude-opus-5-5"  # web/prompts.json의 model과 같게 둔다
 # 서버 쪽 거절 대비(fallbacks)를 지원하는 모델. 그 밖의 모델에는 보내지 않는다.
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"}
 
@@ -19,115 +19,13 @@ MAX_PLAN_FILES = 40
 PLAN_MEDIA = {"application/pdf", "image/jpeg", "image/png", "image/webp", "image/gif"}
 MAX_CELLS = 400
 
-SYSTEM_PROMPT = """당신은 한국 유치원 교사가 일지(놀이 계획과 관찰 기록)를 쓰는 일을 돕습니다.
-
-입력은 두 가지입니다.
-1. form: 이 유치원의 일지 양식입니다. hwpx 표의 칸 목록이고, 각 칸에는 지난번 일지 내용이 들어 있습니다. 이 내용은 이 유치원이 쓰는 문체, 분량, 줄 구성을 보여 주는 예시입니다.
-2. memo: 교사가 이번 일지를 위해 준 정보입니다. 다음 부분이 있을 수 있습니다.
-   - [이번 주 월안]: 유치원 교육계획안에서 이번 주 부분입니다(시기, 놀이주제, 기대되는 우리, 교구, 영역별 놀이, 요일별 바깥놀이·안전교육·행사 등).
-   - [요일별 활동]: 교사가 그날 하기로 정한 활동과, 적었다면 아이 모습입니다.
-   - [더 적을 말]: 그 밖의 메모입니다.
-
-할 일은 이 정보로 이번 일지의 칸 내용을 새로 쓰는 것입니다. 내용이 바뀌어야 하는 칸만 돌려주세요.
-
-원칙
-- 항목 이름 칸(시기, 주 제, 요일, 놀이 활동 같은 머리글)은 그대로 둡니다. 돌려주지 않습니다.
-- 메모에 바뀐다는 말이 없고 매번 같은 내용이 들어가는 칸(하루 일과 시간표, 일과 안내 등)은 그대로 둡니다.
-- 시기, 주제와 소주제, 이주의 목표(기대되는 우리 같은 칸)는 [이번 주 월안]의 글을 그대로 옮기되, 양식의 지난 내용과 같은 모양(글머리 기호, 괄호 속 날짜 표기 등)으로 맞춥니다.
-- 요일별 놀이 활동 칸은 교사가 정한 그날 활동으로 씁니다. 양식의 지난 내용처럼 "자유놀이 – 영역(활동)", "수업 이름 : 내용" 같은 모양을 따릅니다. 교사가 그날 활동을 비워 두었으면 [이번 주 월안]에서 그날에 맞는 활동(교구, 그날 바깥놀이, 영역별 놀이)을 골라 쓰고 notes에 알립니다. 그날이 휴원이나 행사로 적혀 있으면 그대로 반영합니다.
-- 놀이지원 칸은 그날 활동에 필요한 자료, 교구, 교사의 지원을 지난 내용과 비슷한 분량으로 씁니다.
-- 평가·관찰 칸(놀이를 통해 알게되었어요 같은 칸)은 이렇게 씁니다.
-  · 교사가 아이 모습을 적었으면 그 사실을 바탕으로 그 아이의 관찰 기록을 씁니다.
-  · 적지 않았으면 그날 활동을 바탕으로 "유아들은 ~" 처럼 반 전체가 경험하고 배운 점을 씁니다.
-  · 일지는 교사가 남기는 공식 기록입니다. memo에 없는 아이 이름을 만들지 않고, 특정 아이가 하지 않은 말이나 행동을 지어 붙이지 않습니다. 교육적 의미는 활동과 적힌 사실에서 자연스럽게 이어지는 만큼만 덧붙입니다.
-- 이번 일지에 새로 들어가야 하는데 정보가 전혀 없는 칸은 지난 내용을 남기지 말고 "[입력 필요: 필요한 내용]" 한 줄로 채운 뒤 notes에 적습니다.
-- 지난 내용의 문체를 따릅니다. 문장 끝맺음(예: "~함.", "~보임."), 글머리 기호(ㆍ, -), 칸의 줄 수와 분량(지난 글자 수의 0.7~1.3배 정도)을 맞춥니다.
-- lines의 한 항목은 한 문단(한 줄)이 됩니다. 항목 안에 줄바꿈 문자를 넣지 않습니다.
-- 수업일수처럼 이어지는 숫자는 지난 값에서 이어서 셉니다. 메모에 휴일이나 다른 값이 있으면 메모를 따릅니다.
-- 아이 이름은 가명으로 바뀌어 있습니다. 가명을 글자 그대로 쓰고, 조사는 그 이름의 받침에 맞게 붙입니다.
-- 칸 id는 form에 있고 editable이 true인 것만 씁니다.
-
-notes에는 교사가 확인해야 할 점(메모에 없어 비워 둔 칸, 추정한 부분 등)을 적습니다. 선생님께 드리는 짧은 해요체 문장으로 쓰고, 자신을 AI나 모델이라고 부르지 않습니다. 없으면 빈 배열로 둡니다."""
-
-OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "cells": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string"},
-                    "lines": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["id", "lines"],
-                "additionalProperties": False,
-            },
-        },
-        "notes": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["cells", "notes"],
-    "additionalProperties": False,
-}
-
-
-PLAN_SYSTEM_PROMPT = """당신은 한국 유치원의 월간·주간 교육계획안(월안) 문서를 읽고 주별 계획을 정리합니다.
-
-- 교육계획안 표가 있는 쪽만 읽습니다. 동시, 새노래, 가정통신문 같은 다른 쪽은 무시합니다.
-- 표에 적힌 글자를 그대로 옮깁니다. 지어내거나 요약하거나 고치지 않습니다. 글자가 흐려 확실하지 않으면 notes에 적습니다.
-- "*", "-", 빈 칸은 그 항목이 없는 것으로 보고 넣지 않습니다.
-- 한 주 전체에 공통인 칸(기본생활습관, 인성교육, 숲체험, 다문화 교육 등)은 weekly에, 요일마다 다른 칸(바깥놀이, 그날의 안전교육 등)은 그 요일의 days.items에 넣습니다.
-- 행사 칸의 "5일: 가을소풍"처럼 날짜가 붙은 항목은 그 날짜 요일의 items에 category "행사"로 넣습니다.
-- 놀이주제가 "큰 주제 / 작은 주제" 꼴이면 theme과 subtheme으로 나눕니다.
-- 자유놀이 교구처럼 "/"로 나열된 활동은 하나씩 나눠 free_play에 넣습니다.
-- 아름드리놀이처럼 영역별 놀이(언어놀이, 수·과학놀이, 신체놀이, 예술놀이 등)는 areas에 넣습니다.
-- 날짜는 "11.2"처럼 월.일로, 요일은 "월"처럼 한 글자로 씁니다.
-- 주는 문서에 나온 순서대로 씁니다.
-- notes에는 선생님이 확인해야 할 점(흐리거나 가려져 확실하지 않은 글자 등)만 짧은 해요체 문장으로 적습니다. free_play 같은 항목 이름이나 정리한 방법 설명은 쓰지 않습니다."""
-
-PLAN_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "weeks": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "label": {"type": "string"},
-                    "start": {"type": "string"},
-                    "end": {"type": "string"},
-                    "theme": {"type": "string"},
-                    "subtheme": {"type": "string"},
-                    "goals": {"type": "array", "items": {"type": "string"}},
-                    "free_play": {"type": "array", "items": {"type": "string"}},
-                    "areas": {"type": "array", "items": {
-                        "type": "object",
-                        "properties": {"name": {"type": "string"}, "activity": {"type": "string"}},
-                        "required": ["name", "activity"], "additionalProperties": False}},
-                    "days": {"type": "array", "items": {
-                        "type": "object",
-                        "properties": {
-                            "day": {"type": "string"}, "date": {"type": "string"},
-                            "items": {"type": "array", "items": {
-                                "type": "object",
-                                "properties": {"category": {"type": "string"}, "activity": {"type": "string"}},
-                                "required": ["category", "activity"], "additionalProperties": False}},
-                        },
-                        "required": ["day", "date", "items"], "additionalProperties": False}},
-                    "weekly": {"type": "array", "items": {
-                        "type": "object",
-                        "properties": {"category": {"type": "string"}, "activity": {"type": "string"}},
-                        "required": ["category", "activity"], "additionalProperties": False}},
-                },
-                "required": ["label", "start", "end", "theme", "subtheme", "goals", "free_play", "areas", "days", "weekly"],
-                "additionalProperties": False,
-            },
-        },
-        "notes": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["weeks", "notes"],
-    "additionalProperties": False,
-}
+# 지시문과 응답 형식은 web/prompts.json 한 곳에 둔다(브라우저도 같은 파일을 쓴다).
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "prompts.json"), encoding="utf-8") as _f:
+    PROMPTS = json.load(_f)
+SYSTEM_PROMPT = PROMPTS["draft"]["system"]
+OUTPUT_SCHEMA = PROMPTS["draft"]["schema"]
+PLAN_SYSTEM_PROMPT = PROMPTS["plan"]["system"]
+PLAN_SCHEMA = PROMPTS["plan"]["schema"]
 
 
 class AIError(Exception):
@@ -203,6 +101,8 @@ def _ask_claude(system: str, content, schema: dict, max_tokens: int = 16000) -> 
         messages=[{"role": "user", "content": content}],
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": schema}},
     )
+    if os.environ.get("KISSAY_THINKING") == "off":  # 선택: 생각 끄기(Essay 무료체험과 같은 조건 시험용)
+        params["thinking"] = {"type": "disabled"}
     if model in FALLBACK_MODELS:
         params["betas"] = ["server-side-fallback-2026-07-01"]
         params["fallbacks"] = "default"
@@ -337,8 +237,8 @@ def read_plan(files: object, text: object, mode: str) -> dict:
         return _mock_plan()
     if mode != "api":
         raise AIError("자동으로 채우기 준비가 아직 안 됐어요. 일지 도우미를 설치한 분께 알려 주세요.", 503)
-    blocks.append({"type": "text", "text": "이 월안에서 주별 교육계획을 정리해 주세요."})
-    data, meta = _ask_claude(PLAN_SYSTEM_PROMPT, blocks, PLAN_SCHEMA, max_tokens=32000)
+    blocks.append({"type": "text", "text": PROMPTS["plan"]["instruction"]})
+    data, meta = _ask_claude(PLAN_SYSTEM_PROMPT, blocks, PLAN_SCHEMA, max_tokens=PROMPTS["plan"]["max_tokens"])
     result = _clean_plan(data)
     result["meta"] = meta
     return result
