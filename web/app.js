@@ -645,9 +645,10 @@
       const r = await fetch(TRIAL_API + '/status', { cache: 'no-store' });
       if (!r.ok) return;
       const s = await r.json();
-      if (typeof s.limit !== 'number') return;
+      if (!s || typeof s !== 'object' || !('limit' in s)) return;
       ai.remote = { limit: s.limit, capped: !!s.capped };
-      ai.trial = { limit: s.limit, remaining: s.capped ? 0 : Math.max(0, +s.remaining || 0) };
+      // limit 이 숫자가 아니면(null) 사람마다 횟수 제한이 없는 것이라 남은 횟수 줄을 보이지 않는다.
+      ai.trial = typeof s.limit === 'number' ? { limit: s.limit, remaining: s.capped ? 0 : Math.max(0, +s.remaining || 0) } : null;
     } catch (e) { /* 체험 서버가 없거나 이 주소를 허용하지 않음: 내 API 키만 쓴다 */ }
   }
   function refreshAiButton() {
