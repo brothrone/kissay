@@ -224,6 +224,8 @@
 
   /* ---------- 오른쪽 카드 ---------- */
   .side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  /* 오른쪽 아래 '말로 부탁하기' 단추에 마지막 카드가 가리지 않게 여백을 둔다 */
+  .workspace > .side::after { content: ""; flex: none; height: 64px; }
   .card { background: var(--surface); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
   .card h2 { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; font-size: 20px; }
   .card-sub { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
@@ -310,7 +312,7 @@
   .kid-pick:hover { filter: brightness(0.97); }
   .kid-pick b { font-family: var(--font-cute); font-weight: 400; font-size: 14px; }
   .kid-pick.none { background: var(--bg); color: var(--muted); }
-  .usage { margin-top: 12px; padding: 8px 12px; border-radius: 12px; background: var(--bg); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .usage { margin-top: 12px; padding: 8px 12px; border-radius: 12px; background: var(--bg); font-size: 13px; line-height: 1.6; }
   .usage b { font-family: var(--font-cute); font-weight: 400; color: var(--primary); }
   .usage.mine b { color: var(--mint-ink); }
   .names input, .field input {

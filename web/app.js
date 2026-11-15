@@ -836,6 +836,10 @@
           document.createTextNode('을 다 썼어요. 내일 다시 쓸 수 있어요. 칸을 직접 고치고 저장하는 건 그대로 할 수 있어요.'));
       }
       u.hidden = false;
+    } else if (r === 'trial' && !(ai.remote && ai.remote.capped)) {
+      // 사람마다 횟수 제한은 없고, 모두 합친 하루 사용량이 차면 그날은 마감된다.
+      u.append(el('b', null, '횟수 제한 없이'), document.createTextNode(' 쓸 수 있어요. 쓰는 분이 많은 날은 일찍 마감될 수 있어요.'));
+      u.hidden = false;
     } else u.hidden = true;
     let msg = '';
     if (r === 'trial' && ai.remote && ai.remote.capped) msg = '오늘은 무료체험을 쓰는 분이 많아 마감됐어요. 내일 다시 써 주세요.';
@@ -846,7 +850,7 @@
     if (folds.usage) {
       if (ai.trial && r) folds.usage.badge(ai.trial.remaining > 0 ? ai.trial.remaining + '번 남음' : '다 씀', ai.trial.remaining > 0 ? 'mint' : 'warn');
       else if (r === 'trial' && ai.remote && ai.remote.capped) folds.usage.badge('오늘 마감', 'warn');
-      else folds.usage.badge(r ? '쓸 수 있어요' : '연결 안 됨', r ? 'mint' : 'warn');
+      else folds.usage.badge(r === 'trial' ? '횟수 제한 없음' : r ? '쓸 수 있어요' : '연결 안 됨', r ? 'mint' : 'warn');
       if (msg || (ai.trial && !ai.trial.remaining)) folds.usage.open();
     }
     $('chatPrivacy').textContent = '부탁과 일지 글은 아이 이름을 가려서 전달돼요. 서버에는 남지 않아요.';
