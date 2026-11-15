@@ -901,9 +901,9 @@
       else folds.usage.badge(r === 'trial' ? '횟수 제한 없음' : r ? '쓸 수 있어요' : '연결 안 됨', r ? 'mint' : 'warn');
       if (msg || (ai.trial && !ai.trial.remaining)) folds.usage.open();
     }
-    $('chatPrivacy').textContent = '부탁과 일지 글은 아이 이름을 가려서 전달돼요. 서버에는 남지 않아요.';
+    $('chatPrivacy').textContent = '부탁과 일지 글은 아이 이름을 가려서 전달돼요. 시험 기간에는 서비스 개선을 위해 보낸 글을 저장해요.';
     $('privacy').textContent = r === 'trial'
-        ? '채우기를 누르면 메모와 일지 글이 무료체험 서버를 거쳐 Claude로 전달돼요. 서버에는 남지 않고, 아이 이름은 가려서 보내요.'
+        ? '채우기를 누르면 메모와 일지 글이 무료체험 서버를 거쳐 Claude로 전달돼요. 아이 이름은 가려서 보내고, 시험 기간에는 서비스 개선을 위해 보낸 글과 월안 파일을 저장해요.'
         : '채우기를 누르면 메모와 일지 글이 자동 작성 서비스로 전달돼요. 아이 이름은 가려서 보내요.';
     $('aiCodeField').hidden = !(ai.needsCode && r === 'server');
     refreshAiButton();
@@ -1234,6 +1234,50 @@
     refreshNamesCount();
   }
 
+  /* 자유놀이 교구: 월안의 몬테소리 교구 목록에서 요일마다 하나씩, 목록 순서대로.
+     같은 목록을 쓰는 앞 주가 있으면 그 주가 쓴 다음 교구부터 이어 간다(목록이 두 주에 걸쳐 있음). */
+  const GYOGU_KEY = 'kissay.gyogu'; // { 주 키: { 월: '교구', ... } }, '' = 넣지 않음
+  let gyogu = {};
+  try { gyogu = JSON.parse(localStorage.getItem(GYOGU_KEY) || '{}') || {}; } catch (e) { gyogu = {}; }
+  function saveGyogu() { try { localStorage.setItem(GYOGU_KEY, JSON.stringify(gyogu)); } catch (e) { /* 무시 */ } }
+  function gyoguList(w) { return ((w && w.free_play) || []).map((x) => String(x).trim()).filter((x) => x && x !== '*'); }
+  function gyoguOffset() {
+    const w = currentWeek();
+    const list = gyoguList(w).join('/');
+    let off = 0;
+    for (let i = plan.index - 1; i >= 0; i--) {
+      if (gyoguList(plan.weeks[i]).join('/') !== list) break;
+      off += DAYS.length;
+    }
+    return off;
+  }
+  function ensureGyogu() {
+    const w = currentWeek();
+    const list = gyoguList(w);
+    const key = weekKey();
+    if (!list.length) return {};
+    const cur = gyogu[key] = gyogu[key] || {};
+    const off = gyoguOffset();
+    let changed = false;
+    DAYS.forEach((day, i) => {
+      if (cur[day] === '' || (cur[day] && list.includes(cur[day]))) return;
+      cur[day] = list[(off + i) % list.length];
+      changed = true;
+    });
+    if (changed) saveGyogu();
+    return cur;
+  }
+  function cycleGyogu(day) {
+    const list = gyoguList(currentWeek());
+    if (!list.length) return;
+    const cur = gyogu[weekKey()] = gyogu[weekKey()] || {};
+    const options = [...list, ''];
+    const i = options.indexOf(cur[day] === undefined ? '' : cur[day]);
+    cur[day] = options[(i + 1) % options.length];
+    saveGyogu();
+    renderDays();
+  }
+
   function renderDays() {
     const box = $('days');
     const prev = {};
@@ -1242,6 +1286,8 @@
     const w = currentWeek();
     const hasNames = classNames().length > 0;
     const assign = hasNames ? ensureAssignment() : {};
+    const gy = ensureGyogu();
+    const hasGy = gyoguList(w).length > 0;
     DAYS.forEach((day, i) => {
       const info = w && (w.days || []).find((x) => x.day === day);
       const row = el('div', 'day');
@@ -1251,7 +1297,9 @@
       if (info && info.date) head.appendChild(el('span', null, info.date));
       const act = el('input', 'act');
       act.type = 'text';
-      act.placeholder = i === 0 ? '오늘 한 활동 (예: 나사 돌리기, 블록수업 왕관)' : '오늘 한 활동';
+      act.placeholder = hasGy
+        ? (i === 0 ? '특성화 수업 (예: 블록수업 왕관, 체육 집중력 향상)' : '특성화 수업이나 더 한 활동')
+        : (i === 0 ? '오늘 한 활동 (예: 나사 돌리기, 블록수업 왕관)' : '오늘 한 활동');
       act.setAttribute('aria-label', day + '요일 활동');
       act.value = (prev[day] || {}).act || '';
       act.addEventListener('focus', () => { lastDayInput = act; });
@@ -1271,8 +1319,18 @@
       });
       row.append(head, act);
       // 월안의 요일별 항목(바깥놀이, 안전교육 등)은 추천으로 띄우지 않는다. 선생님이 적은 활동만 쓴다.
-      if (hasNames) {
+      if (hasNames || hasGy) {
         const cr = el('div', 'chip-row');
+        if (hasGy) {
+          const g = gy[day] || '';
+          const gp = el('button', 'kid-pick gy-pick' + (g ? '' : ' none'));
+          gp.type = 'button';
+          gp.title = '월안의 몬테소리 교구예요. 눌러서 다른 교구로 바꾸기';
+          gp.setAttribute('aria-label', day + '요일 자유놀이 교구: ' + (g || '넣지 않음') + '. 눌러서 바꾸기');
+          gp.append(document.createTextNode('자유놀이'), el('b', null, g || '넣지 않음'), document.createTextNode('↻'));
+          gp.addEventListener('click', () => cycleGyogu(day));
+          cr.appendChild(gp);
+        }
         if (hasNames) {
           const who = assign[day] || '';
           const pick = el('button', 'kid-pick' + (who ? '' : ' none'));
@@ -1340,7 +1398,7 @@
   function updateDayDots() {
     let n = 0;
     document.querySelectorAll('#days .day').forEach((r) => {
-      const done = !!r.querySelector('.act').value.trim();
+      const done = !!r.querySelector('.act').value.trim() || !!(gyoguList(currentWeek()).length && (gyogu[weekKey()] || {})[r.dataset.day]);
       if (done) n++;
       const t = document.querySelector('#days .day-tab[data-day="' + r.dataset.day + '"]');
       if (t) t.classList.toggle('done', done);
@@ -1407,6 +1465,7 @@
     }
     const rows = Array.from(document.querySelectorAll('#days .day'));
     const anyDay = rows.some((r) => r.querySelector('.act').value.trim() || r.querySelector('.kid').value.trim()) || classNames().length > 0;
+    ensureGyogu();
     if (w || anyDay) {
       const D = rows.map((r) => {
         const day = r.dataset.day;
@@ -1414,7 +1473,10 @@
         const act = r.querySelector('.act').value.trim();
         const kid = r.querySelector('.kid').value.trim();
         const who = classNames().length ? (featured[weekKey()] || {})[day] : '';
-        return day + (info && info.date ? '(' + info.date + ')' : '') + ': 활동: ' + (act || '(비워 둠)')
+        const g = gyoguList(w).length ? (gyogu[weekKey()] || {})[day] : '';
+        return day + (info && info.date ? '(' + info.date + ')' : '') + ': '
+          + (g ? '자유놀이 교구: ' + g + ' / ' : '')
+          + '활동: ' + (act || '(비워 둠)')
           + (who ? ' / 평가 아이: ' + who : '') + (kid ? ' / 아이 모습: ' + kid : '');
       });
       parts.push('[요일별 활동]\n' + D.join('\n'));
