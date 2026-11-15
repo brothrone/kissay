@@ -952,6 +952,11 @@
       if (kind === 'plan' && (payload.files || []).length > 10) {
         throw new Error('월안 파일은 한 번에 10개까지 올릴 수 있어요. 나눠서 올려 주세요.');
       }
+      if (kind === 'plan') {
+        // 무료체험 서버는 월안 요청을 12MB까지 받는다(사진·PDF는 base64라 원래보다 커진다).
+        const size = JSON.stringify(payload).length;
+        if (size > 11.5 * 1024 * 1024) throw new Error('월안 파일이 너무 커요(' + Math.ceil(size / 1048576) + 'MB). 한글 파일(.hwp, .hwpx)로 올리거나, PDF를 교육계획안 쪽만 남겨서 다시 올려 주세요.');
+      }
       let res;
       let data = null;
       try {
